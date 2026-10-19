@@ -10,12 +10,12 @@ A native macOS app inspired by [GlassWire](https://www.glasswire.com), recreatin
 
 | Page | What it does |
 |------|--------------|
-| **Graph** | Live download/upload chart (5 min / 3 h / 24 h / 7 days / 30 days). Left-hand app list with per-app live rates and window totals. Tap an app row to expand its detail panel: 30-minute sparkline, per-host traffic totals, live `ip:port` connections, and a flame block button. Alerts appear as colored pennants on the chart (hover for details). Draggable two-handle timeline navigator, hover tooltips, active app/host indicator strip. |
+| **Graph** | Live download/upload chart (5 min / 3 h / 24 h / 7 days / 30 days) with two display modes: total, or **stacked per-app** (top-5 apps as colored layers, hover for per-app breakdown). Left-hand app list with per-app live rates and window totals. Tap an app row to expand its detail panel: 30-minute sparkline, per-host traffic totals, live `ip:port` connections, and a flame block button. Alerts appear as colored pennants on the chart (hover for details). Draggable two-handle timeline navigator, hover tooltips, active app/host indicator strip. |
 | **Usage** | Daily / weekly / monthly stats, ranked tables per app and per host (down/up/share), CSV export. |
 | **Things** | LAN device discovery with gateway badge, new-device badge, first/last-seen times. |
 | **Firewall** | Integrates the macOS built-in application firewall. GlassWire-style **flame toggles**: light the flame to block an app, tap again to allow (admin password required). Shows per-app live connection counts and rates; expand to inspect remote hosts. |
 | **Alerts** | New app online, app reaching a new host, new device on the LAN, traffic spikes (mean + N·σ detection), DNS server changes, ARP spoofing, firewall changes. System notifications plus in-app filtering. |
-| **Menu bar** | Live ⇩/⇧ rates in the menu bar, pause monitoring, quick access. |
+| **Menu bar** | Live ⇩/⇧ rates in the menu bar. Left click opens a popover panel (30-min mini chart, top-3 apps, pause/open buttons); right click keeps the classic menu. |
 | **Settings** | Sampling interval, history retention, dark/light theme, launch at login, per-alert toggles, spike σ threshold, data reset. |
 
 ## Build & run
@@ -83,5 +83,6 @@ NetGlass/
     ├── UsageAlertsPages.swift # usage page, alerts page
     ├── ThingsFirewallPages.swift # things page, firewall page
     ├── SettingsPage.swift     # settings sheet
+    ├── MenuBarPanel.swift      # menu-bar popover panel
     └── App.swift              # entry point, menu-bar controller
 ```
