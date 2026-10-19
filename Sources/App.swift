@@ -1,43 +1,73 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Menu bar controller
+// MARK: - Menu bar controller (left click: popover panel / right click: menu)
 
 final class MenuBarController: NSObject {
     private let item: NSStatusItem
     private let state: AppState
     private var timer: Timer?
+    private let statusMenu = NSMenu()
+    private var popover: NSPopover?
 
     init(state: AppState) {
         self.state = state
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
-        let menu = NSMenu()
         let speedItem = NSMenuItem(title: "监控中…", action: nil, keyEquivalent: "")
         speedItem.isEnabled = false
-        menu.addItem(speedItem)
-        menu.addItem(.separator())
+        statusMenu.addItem(speedItem)
+        statusMenu.addItem(.separator())
 
         let open = NSMenuItem(title: "打开 NetGlass", action: #selector(openMain), keyEquivalent: "o")
         open.target = self
-        menu.addItem(open)
+        statusMenu.addItem(open)
 
         let pause = NSMenuItem(title: "暂停监控", action: #selector(togglePause), keyEquivalent: "p")
         pause.target = self
-        menu.addItem(pause)
+        statusMenu.addItem(pause)
 
-        menu.addItem(.separator())
+        statusMenu.addItem(.separator())
         let quit = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
-        menu.addItem(quit)
-        menu.delegate = self
-        item.menu = menu
+        statusMenu.addItem(quit)
+        statusMenu.delegate = self
+
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.updateTitle() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
         updateTitle()
+    }
+
+    @objc private func statusItemClicked() {
+        if let event = NSApp.currentEvent, event.type == .rightMouseUp {
+            item.menu = statusMenu
+            item.button?.performClick(nil)
+            item.menu = nil
+            return
+        }
+        togglePopover()
+    }
+
+    private func togglePopover() {
+        if let p = popover, p.isShown {
+            p.performClose(nil)
+            return
+        }
+        let p = NSPopover()
+        p.behavior = .transient
+        let vc = NSHostingController(rootView: MenuBarPanel().environmentObject(state))
+        vc.sizingOptions = .preferredContentSize   // SwiftUI content sizes the popover
+        p.contentViewController = vc
+        if let button = item.button {
+            p.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+        popover = p
     }
 
     func updateTitle() {
@@ -56,6 +86,7 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func openMain() {
+        popover?.performClose(nil)
         NSApp.activate(ignoringOtherApps: true)
         if let win = NSApp.windows.first(where: { $0.canBecomeMain }) {
             win.makeKeyAndOrderFront(nil)

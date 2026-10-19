@@ -125,6 +125,23 @@ final class TrafficStore {
         return out
     }
 
+    /// Per-key total (down+up) bytes/s per slot for the stacked chart.
+    /// Returns arrays aligned with `keys`.
+    func stackedTotals(window: SelectionWindow, keys: [String], slots: Int = 260) -> [[Double]] {
+        let span = max(window.span, 1)
+        let slotSpan = span / Double(slots)
+        var sums = [[Double]](repeating: [Double](repeating: 0, count: slots), count: keys.count)
+        let idxOf = Dictionary(uniqueKeysWithValues: keys.enumerated().map { ($1, $0) })
+        let base = window.start.timeIntervalSince1970
+        forEachPoint(window: window) { t, k, d in
+            guard let ki = idxOf[k] else { return }
+            let idx = Int((t.timeIntervalSince1970 - base) / slotSpan)
+            guard idx >= 0, idx < slots else { return }
+            sums[ki][idx] += Double(d.down + d.up)
+        }
+        return sums.map { $0.map { $0 / slotSpan } }
+    }
+
     /// Miniature overview across the whole retained history.
     func overviewBuckets(retentionDays: Int, slots: Int = 120) -> [Bucket] {
         let end = Date()

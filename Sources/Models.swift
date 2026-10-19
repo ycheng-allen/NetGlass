@@ -41,6 +41,7 @@ struct AppSettings: Codable {
     var spikeFloorBytes: Double = 262_144     // 256 KB/s
 
     var autoBlockNewApp: Bool = false
+    var graphStacked: Bool = false            // main chart: per-app stacked mode
 
     // Tolerant decode: older config.json files lack newer keys.
     init() {}
@@ -62,12 +63,13 @@ struct AppSettings: Codable {
         spikeSigma = try c.decodeIfPresent(Double.self, forKey: .spikeSigma) ?? 3.0
         spikeFloorBytes = try c.decodeIfPresent(Double.self, forKey: .spikeFloorBytes) ?? 262_144
         autoBlockNewApp = try c.decodeIfPresent(Bool.self, forKey: .autoBlockNewApp) ?? false
+        graphStacked = try c.decodeIfPresent(Bool.self, forKey: .graphStacked) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case sampleInterval, retentionDays, appearance, showMenuBarIcon, launchAtLogin
         case alertNewApp, alertNewHost, alertNewDevice, alertSpike, alertDNSChange, alertARPSpoof, alertFirewallChange
-        case spikeSigma, spikeFloorBytes, autoBlockNewApp
+        case spikeSigma, spikeFloorBytes, autoBlockNewApp, graphStacked
     }
 
     static func load() -> AppSettings {
@@ -186,6 +188,12 @@ struct GraphMarker: Identifiable {
     let type: AlertType
     let title: String
     let detail: String
+}
+
+/// Per-app stacked series for the main chart (bytes/s per slot; last layer = "其他").
+struct StackedSeries {
+    var names: [String]
+    var values: [[Double]]
 }
 
 struct AppAlert: Codable, Identifiable {

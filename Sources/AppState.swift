@@ -55,6 +55,8 @@ final class AppState: ObservableObject {
     @Published var windowTotal = Delta()
     @Published var appRows: [AppRow] = []
     @Published var hostRows: [HostRow] = []
+    /// Non-nil when the stacked graph mode is on (top-5 apps + "其他").
+    @Published var stackedSeries: StackedSeries?
 
     // Live details
     @Published var hostNames: [String: String] = [:]
@@ -388,6 +390,30 @@ final class AppState: ObservableObject {
 
         let totals = store.appTotals(window: selection)
         let grand = max(Double(windowTotal.total), 1)
+
+        // Stacked per-app series (top-5 + 其他) when the mode is on
+        if settings.graphStacked {
+            let top = totals.sorted { $0.value.total > $1.value.total }.prefix(5)
+            let keys = top.map { $0.key }
+            let mutKeys = Array(keys)
+            let values = store.stackedTotals(window: selection, keys: mutKeys, slots: graphBuckets.count)
+            var names = mutKeys.map { identity.meta(for: $0).name }
+            var series = values
+            if !series.isEmpty {
+                // "其他" = total (down+up per slot) minus the top-5 layers
+                var other = [Double](repeating: 0, count: graphBuckets.count)
+                for (i, b) in graphBuckets.enumerated() {
+                    let topSum = series.reduce(0.0) { $0 + ($1.indices.contains(i) ? $1[i] : 0) }
+                    other[i] = max(b.down + b.up - topSum, 0)
+                }
+                names.append("其他")
+                series.append(other)
+            }
+            stackedSeries = StackedSeries(names: names, values: series)
+        } else {
+            stackedSeries = nil
+        }
+
         var rows: [AppRow] = totals.map { key, d in
             let meta = identity.meta(for: key)
             let r = lastRates[key] ?? (0, 0)

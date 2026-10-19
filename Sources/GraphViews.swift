@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Fixed per-rank colors for the stacked per-app chart.
+let stackPalette: [Color] = [
+    Color(hex: 0x2BD9C8), Color(hex: 0xFF9E4A), Color(hex: 0x9B8CFF),
+    Color(hex: 0xFF6FA5), Color(hex: 0x8BC34A), Color(hex: 0x8CA0B3),
+]
+
 // MARK: - Graph page (the GlassWire signature screen)
 
 struct GraphPage: View {
@@ -25,12 +31,37 @@ struct GraphPage: View {
                 RangeBar()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                if state.settings.graphStacked, let st = state.stackedSeries {
+                    legend(st)
+                }
                 GraphView(buckets: state.graphBuckets, palette: P,
-                          window: state.selection, markers: graphMarkers)
+                          window: state.selection, markers: graphMarkers,
+                          stacked: state.settings.graphStacked ? state.stackedSeries : nil)
                 InfoStrip()
                 TimelineNavigator()
             }
         }
+    }
+
+    private func legend(_ st: StackedSeries) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                ForEach(st.names.indices, id: \.self) { i in
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(stackPalette[i % stackPalette.count])
+                            .frame(width: 7, height: 7)
+                        Text(st.names[i])
+                            .font(.system(size: 10))
+                            .foregroundColor(P.sub)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
     }
 }
 
@@ -202,6 +233,17 @@ struct RangeBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            Picker("", selection: Binding(
+                get: { state.settings.graphStacked },
+                set: { state.settings.graphStacked = $0 })) {
+                Text("总量").tag(false)
+                Text("分应用").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 108)
+            .help("切换总量图 / Top5 应用堆叠图")
+
             ForEach(SelectionWindow.presets, id: \.0) { preset in
                 let selected = abs(state.selection.span - preset.1) < preset.1 * 0.08 && state.followNow
                 Button {
@@ -243,6 +285,7 @@ struct GraphView: View {
     var palette: Palette
     var window: SelectionWindow
     var markers: [GraphMarker] = []
+    var stacked: StackedSeries?
     @EnvironmentObject var state: AppState
     @State private var hoverX: CGFloat?
 
@@ -253,12 +296,16 @@ struct GraphView: View {
                 Canvas { ctx, _ in
                     Self.draw(ctx: ctx, size: size, buckets: buckets, P: palette,
                               hoverX: hoverX.map { $0 / max(size.width, 1) },
-                              window: window, markers: markers)
+                              window: window, markers: markers, stacked: stacked)
                 }
                 if let fx = hoverX {
                     let fraction = fx / max(size.width, 1)
                     if let m = nearestMarker(fraction: fraction, width: size.width) {
                         markerTooltip(m, width: size.width)
+                    } else if let st = stacked, !st.values.isEmpty {
+                        stackedTooltip(st, fraction: fraction)
+                            .offset(x: min(max(fx - 80, 6), max(size.width - 220, 6)), y: 10)
+                            .allowsHitTesting(false)
                     } else {
                         trafficTooltip(fraction: fraction)
                             .offset(x: min(max(fx - 70, 6), max(size.width - 176, 6)), y: 10)
@@ -276,6 +323,46 @@ struct GraphView: View {
                 }
             }
         }
+    }
+
+    private func stackedTooltip(_ st: StackedSeries, fraction: CGFloat) -> some View {
+        let idx = clamp(Int(CGFloat(st.values.first?.count ?? 0) * fraction), 0, max((st.values.first?.count ?? 1) - 1, 0))
+        let total = st.values.reduce(0.0) { $0 + ($1.indices.contains(idx) ? $1[idx] : 0) }
+        let lines = st.names.indices
+            .map { i -> (String, Int, Double) in (st.names[i], i, st.values[i].indices.contains(idx) ? st.values[i][idx] : 0) }
+            .filter { $0.2 > 1 }
+            .sorted { $0.2 > $1.2 }
+        let t = buckets.indices.contains(idx) ? buckets[idx].t : Date()
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(Fmt.timeFull(t))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(palette.sub)
+            ForEach(lines.prefix(6), id: \.1) { line in
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(stackPalette[line.1 % stackPalette.count])
+                        .frame(width: 6, height: 6)
+                    Text(line.0)
+                        .font(.system(size: 10))
+                        .foregroundColor(palette.text)
+                        .lineLimit(1)
+                    Text(Fmt.speed(line.2))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(palette.sub)
+                }
+            }
+            HStack(spacing: 5) {
+                Text("合计").font(.system(size: 10, weight: .medium)).foregroundColor(palette.text)
+                Text(Fmt.speed(total))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(palette.accent)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: 210, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 6).fill(palette.card))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.border))
+        .shadow(radius: 4)
     }
 
     // MARK: markers
@@ -371,7 +458,8 @@ struct GraphView: View {
     }
 
     static func draw(ctx: GraphicsContext, size: CGSize, buckets: [Bucket], P: Palette,
-                     hoverX: CGFloat?, window: SelectionWindow, markers: [GraphMarker]) {
+                     hoverX: CGFloat?, window: SelectionWindow, markers: [GraphMarker],
+                     stacked: StackedSeries?) {
         let w = size.width, h = size.height
         guard w > 10, h > 10 else { return }
 
@@ -381,9 +469,20 @@ struct GraphView: View {
             return
         }
 
+        let stackLayers = (stacked?.values.isEmpty == false) ? stacked!.values : nil
+        let n = buckets.count
+
         var maxV = 0.0
-        for b in buckets {
-            maxV = max(maxV, b.down, b.up)
+        if let layers = stackLayers {
+            let slotCount = layers.first?.count ?? 0
+            for i in 0..<slotCount {
+                let total = layers.reduce(0.0) { $0 + ($1.indices.contains(i) ? $1[i] : 0) }
+                maxV = max(maxV, total)
+            }
+        } else {
+            for b in buckets {
+                maxV = max(maxV, b.down, b.up)
+            }
         }
         let niceMax = niceCeil(maxV * 1.15)
 
@@ -400,7 +499,43 @@ struct GraphView: View {
             ctx.draw(label, at: CGPoint(x: w - 42, y: y - 6), anchor: .leading)
         }
 
-        let n = buckets.count
+        // stacked per-app layers
+        if let layers = stackLayers {
+            let slotCount = layers.first?.count ?? 0
+            guard slotCount > 1 else { return }
+            var cum = [Double](repeating: 0, count: slotCount)
+            for (li, layer) in layers.enumerated() {
+                let color = stackPalette[li % stackPalette.count]
+                var area = Path()
+                var topEdge: [CGPoint] = []
+                for i in 0..<slotCount {
+                    let v = cum[i] + (layer.indices.contains(i) ? layer[i] : 0)
+                    let x = w * CGFloat(i) / CGFloat(slotCount - 1)
+                    let y = h - CGFloat(min(v / niceMax, 1)) * h
+                    topEdge.append(CGPoint(x: x, y: y))
+                }
+                if let first = topEdge.first {
+                    area.move(to: CGPoint(x: first.x, y: h))
+                    for pt in topEdge { area.addLine(to: pt) }
+                    // walk back down the previous cumulative boundary
+                    for j in stride(from: slotCount - 1, through: 0, by: -1) {
+                        let x = w * CGFloat(j) / CGFloat(slotCount - 1)
+                        let y = h - CGFloat(min(cum[j] / niceMax, 1)) * h
+                        area.addLine(to: CGPoint(x: x, y: y))
+                    }
+                    area.closeSubpath()
+                    ctx.fill(area, with: .color(color.opacity(0.55)))
+                    var line = Path()
+                    line.move(to: topEdge[0])
+                    for pt in topEdge.dropFirst() { line.addLine(to: pt) }
+                    ctx.stroke(line, with: .color(color.opacity(0.95)), lineWidth: 1)
+                }
+                for i in 0..<slotCount {
+                    cum[i] += layer.indices.contains(i) ? layer[i] : 0
+                }
+            }
+            return
+        }
 
         func seriesPath(_ values: [Double]) -> (area: Path, line: Path) {
             var area = Path()
