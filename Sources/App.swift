@@ -1,0 +1,123 @@
+import SwiftUI
+import AppKit
+
+// MARK: - Menu bar controller
+
+final class MenuBarController: NSObject {
+    private let item: NSStatusItem
+    private let state: AppState
+    private var timer: Timer?
+
+    init(state: AppState) {
+        self.state = state
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        super.init()
+
+        let menu = NSMenu()
+        let speedItem = NSMenuItem(title: "监控中…", action: nil, keyEquivalent: "")
+        speedItem.isEnabled = false
+        menu.addItem(speedItem)
+        menu.addItem(.separator())
+
+        let open = NSMenuItem(title: "打开 NetGlass", action: #selector(openMain), keyEquivalent: "o")
+        open.target = self
+        menu.addItem(open)
+
+        let pause = NSMenuItem(title: "暂停监控", action: #selector(togglePause), keyEquivalent: "p")
+        pause.target = self
+        menu.addItem(pause)
+
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+        menu.delegate = self
+        item.menu = menu
+
+        let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.updateTitle() }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+        updateTitle()
+    }
+
+    func updateTitle() {
+        item.isVisible = state.settings.showMenuBarIcon
+        guard state.settings.showMenuBarIcon else { return }
+        let d = state.paused ? "已暂停" : compact(state.liveDown)
+        let u = state.paused ? "" : compact(state.liveUp)
+        item.button?.title = " ⇩ \(d)  ⇧ \(u)"
+    }
+
+    private func compact(_ v: Double) -> String {
+        if v < 0.5 { return "0" }
+        let kb = v / 1024
+        if kb < 1024 { return String(format: "%.0fK", kb) }
+        return String(format: "%.1fM", kb / 1024)
+    }
+
+    @objc private func openMain() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let win = NSApp.windows.first(where: { $0.canBecomeMain }) {
+            win.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    @objc private func togglePause() {
+        state.togglePause()
+    }
+
+    @objc private func quit() {
+        NSApp.terminate(nil)
+    }
+}
+
+extension MenuBarController: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        if let speedItem = menu.items.first {
+            speedItem.title = "⬇︎ \(Fmt.speed(state.liveDown))   ⬆︎ \(Fmt.speed(state.liveUp))"
+        }
+        if menu.items.count > 3 {
+            menu.items[3].title = state.paused ? "继续监控" : "暂停监控"
+        }
+    }
+}
+
+// MARK: - App delegate
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let state = AppState()
+    private var menuBar: MenuBarController?
+    private var started = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        menuBar = MenuBarController(state: state)
+        startOnce()
+    }
+
+    func startOnce() {
+        guard !started else { return }
+        started = true
+        state.start()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+}
+
+// MARK: - Entry
+
+@main
+struct NetGlassApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+
+    var body: some Scene {
+        WindowGroup {
+            RootView()
+                .environmentObject(delegate.state)
+                .frame(minWidth: 1150, minHeight: 720)
+        }
+        .windowStyle(.hiddenTitleBar)
+    }
+}
