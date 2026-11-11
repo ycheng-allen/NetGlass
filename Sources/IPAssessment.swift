@@ -40,6 +40,11 @@ struct IPRiskDetails: Codable {
     var asnKind: String?
     var registeredCountry: String?
     var rpki: String?
+    var isp: String?
+    var abuseLevel: String?
+    var abuseScoreRaw: String?
+    var honeypotThreat: Double?
+    var sceneTrustScore: Double?
 }
 
 struct IPGeo: Codable {
@@ -65,16 +70,19 @@ struct IPAssessmentResult: Codable, Identifiable {
     var device: [String: String]
     var browserError: String?
     var regionMessage: String?
+    var regionAssessment: ClaudeRegionAssessment?
     var serviceStatus: String?
     var serviceError: String?
     var rules: IPReferenceRules?
     var serviceDetails: IPServiceResponse?
     var udpExits: [IPExit]?
     var connectivity: [IPExit]?
+    var apiRecheck: IPExit?
     var connectivityDate: Date?
     var ipsum: IPsumObservation?
     var checkMyIP: CheckMyIPObservation?
     var checkMyIPBrowser: CheckMyIPBrowserObservation?
+    var usageRadar: IPUsageRadar?
 }
 
 struct IPAssessmentHTTP {
@@ -136,33 +144,28 @@ struct IPAssessmentHTTP {
     }
 
     static func regionPolicy(_ html: String, countryCode: String?, now: Date) -> String {
-        guard let countryCode else { return "未取得出口地区，支持情况未知" }
-        if let regex = try? NSRegularExpression(pattern: #"<time[^>]*dateTime="([^"]+)""#),
-           let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-           let range = Range(match.range(at: 1), in: html) {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let effective = formatter.date(from: String(html[range])), effective > now {
-                return "来源页面公布的版本尚未生效，当前支持情况未知"
-            }
-        }
-        guard let marker = html.range(of: "Countries and regions where we currently offer access"),
-              let end = html[marker.upperBound...].range(of: "</ul>") else { return "地区列表格式变化，无法判定" }
-        let list = String(html[marker.upperBound..<end.lowerBound])
-        let aliases = ["US": "United States of America", "KR": "South Korea", "GB": "United Kingdom", "TR": "Türkiye"]
-        let name = aliases[countryCode.uppercased()] ?? Locale(identifier: "en_US").localizedString(forRegionCode: countryCode.uppercased()) ?? countryCode
-        let pattern = #"<li[^>]*>"# + NSRegularExpression.escapedPattern(for: name) + #"(?:</li>| \()"#
-        let matched = list.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
-        return matched ? "出口定位地区出现在官方列表中，请查看地区条款" : "官方列表未匹配该定位地区，请核对地区条款"
+        ClaudeRegionAssessment.parse(html, countryCode: countryCode, now: now).message
     }
 
     func trace(name: String, url: String) async -> IPExit {
         let began = Date()
         do {
             let values = Self.traceValues(String(decoding: try await data(url), as: UTF8.self))
+            if name == "Claude API", values["h"]?.lowercased() != "api.anthropic.com" { throw URLError(.cannotParseResponse) }
             guard let ip = values["ip"], Self.validIP(ip) else { throw URLError(.cannotParseResponse) }
             return IPExit(name: name, ip: ip, country: values["loc"], milliseconds: Date().timeIntervalSince(began) * 1000)
         } catch { return IPExit(name: name, error: error.localizedDescription) }
+    }
+
+    static let slowAPIThresholdMS: Double = 2000
+
+    func apiTrace() async -> (first: IPExit, repeatSample: IPExit?) {
+        let url = "https://api.anthropic.com/cdn-cgi/trace"
+        let first = await trace(name: "Claude API", url: url)
+        guard let duration = first.milliseconds, duration >= Self.slowAPIThresholdMS, !Task.isCancelled else {
+            return (first, nil)
+        }
+        return (first, await trace(name: "Claude API", url: url))
     }
 
     func domestic() async -> IPExit {
@@ -235,6 +238,7 @@ final class IPAssessment: ObservableObject {
             async let claudeTask = http.trace(name: "Claude", url: "https://claude.ai/cdn-cgi/trace")
             async let cloudflareTask = http.trace(name: "Cloudflare", url: "https://1.1.1.1/cdn-cgi/trace")
             async let domesticTask = http.domestic()
+            async let apiTask = http.apiTrace()
             async let anthropicTask = http.trace(name: "Anthropic", url: "https://www.anthropic.com/cdn-cgi/trace")
             async let browserTask = browser.run()
             async let checkMyIPBrowserTask = checkMyIPBrowser.run()
@@ -256,7 +260,7 @@ final class IPAssessment: ObservableObject {
             var riskSourceNote: String?
             if let ip = claude.ip {
                 do {
-                    risk = try await http.json(IPRiskDetails.self, "https://ip.net.coffee/api/iprisk/\(ip)")
+                    risk = try await http.json(IPRiskDetails.self, "https://ip.net.coffee/api/ip/lookup/\(ip)")
                     if let record = risk {
                         let scoped = try record.scoped(to: ip)
                         risk = scoped.0
@@ -269,6 +273,8 @@ final class IPAssessment: ObservableObject {
                     checkedAt = Date()
                 } catch { riskError = error.localizedDescription }
             } else { riskError = "未取得 Claude 出口 IP" }
+            let usageASN = risk?.asn
+            async let usageRadar = http.usageRadar(asn: usageASN)
             let exits = await exitGeo
             if let geo = exits.first?.geo {
                 var combined = risk ?? IPRiskDetails()
@@ -284,7 +290,7 @@ final class IPAssessment: ObservableObject {
             async let udpGeo = http.geographies(udpAddresses.map { IPExit(name: "UDP", ip: $0) })
             let rules = await ruleTask.flatMap { IPReferenceRules.parse(String(decoding: $0, as: UTF8.self)) }
             let policy = await policyTask
-            let regionMessage = policy.map { IPAssessmentHTTP.regionPolicy(String(decoding: $0, as: UTF8.self), countryCode: risk?.countryCode ?? claude.country, now: Date()) } ?? "官方地区列表获取失败，支持情况未知"
+            let regionAssessment = policy.map { ClaudeRegionAssessment.parse(String(decoding: $0, as: UTF8.self), countryCode: risk?.countryCode ?? claude.country, now: Date()) }
             var device = probe.device
             device["系统版本"] = ProcessInfo.processInfo.operatingSystemVersionString
             let service = await statusTask
@@ -294,7 +300,8 @@ final class IPAssessment: ObservableObject {
             result?.riskCheckedAt = checkedAt
             result?.riskSourceNote = riskSourceNote
             result?.rules = rules
-            result?.regionMessage = regionMessage
+            result?.regionAssessment = regionAssessment
+            result?.regionMessage = regionAssessment?.message ?? "官方地区列表获取失败，支持情况未知"
             result?.device = device
             result?.browserError = probe.error
             result?.udp = udpAddresses
@@ -302,7 +309,9 @@ final class IPAssessment: ObservableObject {
             result?.serviceStatus = service?.status.description
             result?.serviceError = service == nil ? "服务状态获取失败" : nil
             result?.serviceDetails = service
-            result?.connectivity = [claude, anthropic]
+            let api = await apiTask
+            result?.connectivity = [claude, api.first, anthropic]
+            result?.apiRecheck = api.repeatSample
             result?.connectivityDate = observedAt
             phase = "正在完成 DNS、UDP 与 IPsum 名单匹配…"
             let (dns, dnsMessage) = await dnsTask
@@ -320,8 +329,11 @@ final class IPAssessment: ObservableObject {
             result?.checkMyIP = checkMyIP
             result?.checkMyIPBrowser = checkMyIPBrowserResult
             if let country = result?.claudeCountry, let policy {
-                result?.regionMessage = IPAssessmentHTTP.regionPolicy(String(decoding: policy, as: UTF8.self), countryCode: country, now: Date())
+                let assessment = ClaudeRegionAssessment.parse(String(decoding: policy, as: UTF8.self), countryCode: country, now: Date())
+                result?.regionAssessment = assessment
+                result?.regionMessage = assessment.message
             }
+            result?.usageRadar = await usageRadar
             result?.date = Date()
             if let report = result {
                 history.insert(report, at: 0)
@@ -341,11 +353,13 @@ final class IPAssessment: ObservableObject {
             defer { session.invalidateAndCancel(); connectivityRunning = false; connectivityTask = nil }
             let http = IPAssessmentHTTP(session: session, runID: UUID().uuidString)
             async let claude = http.trace(name: "Claude", url: "https://claude.ai/cdn-cgi/trace")
+            async let apiTask = http.apiTrace()
             async let anthropic = http.trace(name: "Anthropic", url: "https://www.anthropic.com/cdn-cgi/trace")
             async let service: IPServiceResponse? = try? http.json(IPServiceResponse.self, "https://status.claude.com/api/v2/summary.json")
-            let (first, second, status) = await (claude, anthropic, service)
+            let (first, api, second, status) = await (claude, apiTask, anthropic, service)
             guard !Task.isCancelled, result?.id == id else { return }
-            result?.connectivity = [first, second]
+            result?.connectivity = [first, api.first, second]
+            result?.apiRecheck = api.repeatSample
             result?.connectivityDate = Date()
             result?.serviceDetails = status
             result?.serviceStatus = status?.status.description

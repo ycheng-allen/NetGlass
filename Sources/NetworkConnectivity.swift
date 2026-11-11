@@ -5,6 +5,7 @@ struct ConnectivityTarget: Codable, Identifiable {
     var group: String
     var name: String
     var endpoint: String
+    var icon: String?
     var id: String { group + "|" + name }
     var host: String { URL(string: endpoint)?.host ?? endpoint }
 }
@@ -24,6 +25,7 @@ struct ConnectivityCatalog {
         let body = String(source[start.upperBound..<end.lowerBound])
         guard let rows = try? NSRegularExpression(pattern: #"\{([^{}]+)\}"#),
               let fields = try? NSRegularExpression(pattern: #"(cc|name|host|url):\s*'([^']*)'"#) else { return nil }
+        let bundledIcons = Dictionary(uniqueKeysWithValues: bundled().map { ($0.id, $0.icon) })
         var targets: [ConnectivityTarget] = []
         var identifiers = Set<String>()
         for match in rows.matches(in: body, range: NSRange(body.startIndex..., in: body)) {
@@ -38,7 +40,8 @@ struct ConnectivityCatalog {
             guard let endpoint, let url = URL(string: endpoint), url.scheme == "https", url.user == nil, url.password == nil,
                   let host = url.host, host != "localhost", !host.hasSuffix(".local"), !host.hasSuffix(".localhost"),
                   !IPAssessmentHTTP.validIP(host) || IPAssessmentHTTP.publicIP(host) else { return nil }
-            let target = ConnectivityTarget(group: group, name: name, endpoint: endpoint)
+            var target = ConnectivityTarget(group: group, name: name, endpoint: endpoint)
+            target.icon = bundledIcons[target.id] ?? nil
             guard identifiers.insert(target.id).inserted else { return nil }
             targets.append(target)
         }
@@ -52,19 +55,22 @@ struct ConnectivityCatalog {
 }
 
 final class NetworkConnectivity: ObservableObject {
-    static let rounds = 8
+    static let rounds = 3
     @Published var targets = ConnectivityCatalog.bundled()
     @Published var samples: [String: [ConnectivitySample]] = [:]
     @Published var running = false
     @Published var activeGroup: String?
     @Published var checkedAt: Date?
+    @Published var duration: TimeInterval?
     @Published var catalogMessage = "内置站点列表 · 全部测试时检查最新列表"
     private var task: Task<Void, Never>?
     private var session: URLSession?
 
     static func median(_ samples: [ConnectivitySample]) -> Double? {
         let values = samples.compactMap(\.milliseconds).sorted()
-        return values.isEmpty ? nil : values[values.count / 2]
+        guard !values.isEmpty else { return nil }
+        let middle = values.count / 2
+        return values.count.isMultiple(of: 2) ? (values[middle - 1] + values[middle]) / 2 : values[middle]
     }
 
     static func probe(_ target: ConnectivityTarget, session: URLSession, token: String) async -> ConnectivitySample {
@@ -87,13 +93,15 @@ final class NetworkConnectivity: ObservableObject {
         guard !running else { return }
         running = true
         activeGroup = group
+        duration = nil
+        let began = ProcessInfo.processInfo.systemUptime
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.timeoutIntervalForResource = 3
         let session = URLSession(configuration: configuration)
         self.session = session
         task = Task {
-            defer { session.invalidateAndCancel(); self.session = nil; running = false; activeGroup = nil; task = nil }
+            defer { session.invalidateAndCancel(); self.session = nil; duration = ProcessInfo.processInfo.systemUptime - began; running = false; activeGroup = nil; task = nil }
             if group == nil {
                 do {
                     let http = IPAssessmentHTTP(session: session, runID: UUID().uuidString)
@@ -125,13 +133,11 @@ final class NetworkConnectivity: ObservableObject {
 
     @MainActor
     private func test(_ target: ConnectivityTarget, session: URLSession) async {
-        _ = await Self.probe(target, session: session, token: UUID().uuidString)
-        for round in 0..<Self.rounds {
+        for _ in 0..<Self.rounds {
             guard !Task.isCancelled else { return }
             let sample = await Self.probe(target, session: session, token: UUID().uuidString)
             guard !Task.isCancelled else { return }
             samples[target.id, default: []].append(sample)
-            if round + 1 < Self.rounds { try? await Task.sleep(nanoseconds: UInt64.random(in: 90_000_000...230_000_000)) }
         }
     }
 

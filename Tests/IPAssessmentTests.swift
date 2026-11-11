@@ -111,6 +111,7 @@ assert(bundledTargets.count >= 40 && Set(bundledTargets.map(\.id)).count == bund
 assert(ConnectivityCatalog.groups.allSatisfy { group in bundledTargets.contains { $0.group == group.0 } })
 assert(NetworkConnectivity.median([ConnectivitySample(milliseconds: 400), ConnectivitySample(error: "timeout"), ConnectivitySample(milliseconds: 100), ConnectivitySample(milliseconds: 200)]) == 200)
 assert(NetworkConnectivity.median([ConnectivitySample(error: "timeout")]) == nil)
+assert(NetworkConnectivity.median([ConnectivitySample(milliseconds: 100), ConnectivitySample(error: "timeout"), ConnectivitySample(milliseconds: 400)]) == 250)
 let representative = IPRiskDetails(ip: "192.0.2.80", cidr: "192.0.2.0/24", asn: 64500, is_datacenter: true, is_vpn: true, is_proxy: false, is_abuser: true, reverseDNS: "other.example")
 let scopedRisk = try representative.scoped(to: "192.0.2.1")
 assert(scopedRisk.0.asn == 64500 && scopedRisk.0.is_datacenter == true && scopedRisk.1 != nil)
@@ -205,3 +206,158 @@ assert(riskSample.claudeRiskClues.contains { $0.id == "lists" && $0.kind == .att
 }
 let siteResult = CheckMyIPBrowserObservation(checkedAt: now, ip: "2001:db8::1", browserScore: 80, ipScore: 90, overallScore: 86)
 assert(siteResult.matches("2001:db8:0:0::1") && !siteResult.matches("192.0.2.1"))
+
+// Official-policy matches must never be inferred from reputation or a future policy.
+let policyDate = ISO8601DateFormatter().date(from: "2026-11-11T09:00:00Z")!
+let officialList = "Countries and regions where we currently offer access<ul><li><strong>United States of America</strong></li><li>Japan</li></ul>"
+let notListed = ClaudeRegionAssessment.parse(officialList, countryCode: "CN", now: policyDate)
+assert(notListed.status == .unlisted)
+assert(ClaudeRegionAssessment.parse(officialList, countryCode: "us", now: policyDate).status == .listed)
+assert(ClaudeRegionAssessment.parse(officialList, countryCode: "XX", now: policyDate).status == .unknown)
+assert(ClaudeRegionAssessment.parse("changed", countryCode: "CN", now: policyDate).status == .unknown)
+assert(ClaudeRegionAssessment.parse("Effective tomorrow" + officialList, countryCode: "CN", now: policyDate).status == .unknown)
+for date in ["2026-11-12T00:00:00.000Z", "2026-11-12T00:00:00Z", "2026-11-12"] {
+    let futureList = "<time datetime='" + date + "'>Effective</time>" + officialList
+    assert(ClaudeRegionAssessment.parse(futureList, countryCode: "CN", now: policyDate).status == .notEffective)
+}
+assert(ClaudeRegionAssessment.parse("<time datetime='bad'>Effective</time>" + officialList, countryCode: "CN", now: policyDate).status == .unknown)
+var policySample = snapshot(policyDate, ip: "192.0.2.1")
+policySample.risk = IPRiskDetails(countryCode: "CN", is_vpn: true)
+policySample.regionAssessment = notListed
+assert(policySample.claudeRiskClues.contains { $0.id == "region" && $0.evidence == .officialRule })
+assert(policySample.claudeRiskClues.contains { $0.id == "anon" && $0.evidence == .reputation })
+policySample.regionAssessment = ClaudeRegionAssessment.parse("<time dateTime=\"2026-11-12T00:00:00Z\">Effective</time>" + officialList, countryCode: "CN", now: policyDate)
+assert(!policySample.claudeRiskClues.contains { $0.evidence == .officialRule })
+assert(!policySample.claudeRiskClues.contains { $0.id == "policy-version" })
+policySample.regionAssessment = nil
+assert(!policySample.claudeRiskClues.contains { $0.evidence == .officialRule }, "third-party restricted countries cannot become official hits")
+policySample.regionAssessment = notListed
+policySample.risk?.countryCode = "US"
+assert(!policySample.claudeRiskClues.contains { $0.evidence == .officialRule }, "stored policy results must match the observed country")
+policySample.regionAssessment = ClaudeRegionAssessment.parse(officialList, countryCode: "US", now: policyDate)
+policySample.rules?.restricted["US"] = "third-party mismatch"
+assert(!policySample.claudeRiskClues.contains { $0.evidence == .officialRule })
+assert(!policySample.claudeRiskClues.contains { $0.id == "region-reference" })
+policySample.ipsum = IPsumObservation(ip: "192.0.2.1", occurrences: 3, checkedAt: policyDate)
+assert(policySample.claudeRiskClues.contains { $0.id == "ipsum" && $0.evidence == .reputation })
+policySample.ipsum?.ip = "192.0.2.2"
+assert(!policySample.claudeRiskClues.contains { $0.id == "ipsum" })
+var ipv6Sample = snapshot(policyDate, ip: "2001:4860::1")
+ipv6Sample.udp = ["2001:4860:0:0:0:0:0:1"]
+assert(!ipv6Sample.claudeRiskClues.contains { $0.id == "webrtc" })
+ipv6Sample.udp = ["2001:4860::2"]
+assert(ipv6Sample.claudeRiskClues.contains { $0.id == "webrtc" && $0.evidence == .environment })
+let encodedPolicy = try JSONEncoder().encode(policySample)
+let restoredPolicy = try JSONDecoder().decode(IPAssessmentResult.self, from: encodedPolicy)
+assert(restoredPolicy.regionAssessment?.status == .listed)
+assert(restoredSample.regionAssessment == nil, "legacy history cannot imply official policy verification")
+assert(Set(ClaudeAccountPolicy.items.map(\.id)).count == ClaudeAccountPolicy.items.count)
+assert(ClaudeAccountPolicy.items.allSatisfy { URL(string: $0.sourceURL)?.scheme == "https" })
+print("PASS policy evidence boundaries, future dates, source conflicts, IPsum scope and IPv6 equivalence")
+
+var environmentSample = snapshot(now, ip: "8.8.8.8")
+environmentSample.risk = IPRiskDetails(countryCode: "US", timezone: "America/New_York")
+environmentSample.device = ["时区": "Asia/Shanghai"]
+environmentSample.dns = [IPExit(name: "DNS", ip: "1.1.1.1", country: "CN")]
+environmentSample.udp = ["1.1.1.1", "192.168.1.2"]
+assert(Set(environmentSample.environmentRiskClues.map(\.id)) == ["webrtc", "dns", "timezone"])
+assert(environmentSample.environmentRiskClues.allSatisfy { $0.evidence == .environment && $0.kind == .review })
+environmentSample.device = ["时区": "US/Eastern"]
+environmentSample.dns = [IPExit(name: "DNS", ip: "1.1.1.1", country: "US")]
+environmentSample.udp = ["8.8.8.8", "192.168.1.2"]
+assert(environmentSample.environmentRiskClues.isEmpty, "same path and equivalent time-zone aliases must not warn")
+environmentSample.risk?.timezone = nil
+environmentSample.dns = []
+environmentSample.udp = []
+assert(environmentSample.environmentRiskClues.isEmpty, "missing observations must not create risk items")
+environmentSample.checkMyIPBrowser = CheckMyIPBrowserObservation(checkedAt: now, ip: "1.1.1.1", checks: [.init(id: "dns", state: "bad", text: "source"), .init(id: "webrtc", state: "off", text: "unavailable"), .init(id: "tz", state: "warn", text: "source")])
+assert(Set(environmentSample.environmentRiskClues.map(\.id)) == ["dns", "timezone"])
+assert(environmentSample.environmentRiskClues.allSatisfy { $0.detail.contains("页面出口") })
+print("PASS environment clues: independent risks, scope, missing data, timezone aliases and private UDP exclusion")
+
+let intelFixture = Data(#"{"ip":"8.8.8.8","company_type":"hosting","isp":"Example Provider","is_public_service":true,"rpki_status":"valid","intelligence":{"abuser_level":"elevated","abuser_score_raw":0.0195,"rep_threat":25.5,"threats":[{"label":"example intelligence","severity":"warn"}]}}"#.utf8)
+let intel = try JSONDecoder().decode(IPRiskDetails.self, from: intelFixture)
+assert(intel.isp == "Example Provider" && intel.abuseScoreRaw == "0.0195" && intel.honeypotThreat == 25.5)
+assert(intel.evidence?.first?.label == "example intelligence" && intel.trafficProfile == "公共服务／任播类型")
+let restoredIntel = try JSONDecoder().decode(IPRiskDetails.self, from: JSONEncoder().encode(intel))
+assert(restoredIntel.abuseLevel == "elevated" && restoredIntel.honeypotThreat == 25.5)
+var subnetIntel = intel
+subnetIntel.ip = "8.8.8.9"
+subnetIntel.cidr = "8.8.8.0/24"
+let scopedIntel = try subnetIntel.scoped(to: "8.8.8.8").0
+assert(scopedIntel.abuseScoreRaw == nil && scopedIntel.honeypotThreat == nil && scopedIntel.evidence == nil)
+func stabilitySample(_ minutesAgo: Double, _ ip: String, residential: Bool = false) -> IPAssessmentResult {
+    var s = snapshot(now.addingTimeInterval(-minutesAgo * 60), ip: ip)
+    s.risk = IPRiskDetails(isResidential: residential, is_datacenter: !residential)
+    return s
+}
+let churnHistory = [stabilitySample(45, "8.8.8.8"), stabilitySample(30, "1.1.1.1"), stabilitySample(15, "9.9.9.9")]
+let currentHosting = stabilitySample(0, "4.2.2.2")
+let churn = IPExitStability.analyze(current: currentHosting, history: churnHistory + [currentHosting])
+assert(churn.sampleCount == 4 && churn.hostingChanges == 3 && churn.clue(current: currentHosting)?.id == "hosting-churn" && churn.clue(current: currentHosting)?.kind == .critical)
+let oneSwitch = IPExitStability.analyze(current: currentHosting, history: [churnHistory[0]])
+assert(oneSwitch.clue(current: currentHosting) == nil)
+let residentialHistory = [stabilitySample(45,"8.8.8.8",residential:true),stabilitySample(30,"1.1.1.1",residential:true),stabilitySample(15,"9.9.9.9",residential:true)]
+let currentHome = stabilitySample(0,"4.2.2.2",residential:true)
+assert(IPExitStability.analyze(current: currentHome, history: residentialHistory).clue(current: currentHome) == nil)
+assert(IPExitStability.analyze(current: currentHosting, history: residentialHistory).hostingChanges == 0)
+assert(IPExitStability.analyze(current: currentHosting, history: [stabilitySample(61,"8.8.8.8"),stabilitySample(-1,"1.1.1.1")]).sampleCount == 1)
+var unknown = churnHistory[1]; unknown.risk = nil
+assert(IPExitStability.analyze(current: currentHosting, history: [churnHistory[0],unknown,churnHistory[2]]).hostingChanges == 1)
+let sameIPv6 = stabilitySample(5,"2001:4860:0:0:0:0:0:1")
+let sameIPv6Now = stabilitySample(0,"2001:4860::1")
+assert(IPExitStability.analyze(current: sameIPv6Now, history: [sameIPv6]).hostingChanges == 0)
+print("PASS Net.Coffee intelligence decoding, subnet scope and evidence-based hosting stability")
+
+var routes = snapshot(now, ip: "8.8.8.8")
+let website = IPExit(name: "Claude", ip: "8.8.8.8")
+var api = IPExit(name: "Claude API", ip: "1.1.1.1", milliseconds: 2100)
+routes.connectivity = [website, api]
+assert(routes.environmentRiskClues.contains { $0.id == "domain-route" && $0.detail.contains("api.anthropic.com") })
+assert(!routes.environmentRiskClues.contains { $0.id == "api-latency" })
+routes.apiRecheck = IPExit(name: "Claude API", ip: "1.1.1.1", milliseconds: 2000)
+assert(routes.environmentRiskClues.contains { $0.id == "api-latency" })
+routes.apiRecheck?.milliseconds = 1900
+api.ip = website.ip
+routes.connectivity = [website, api]
+assert(routes.environmentRiskClues.isEmpty, "refreshed connectivity supersedes earlier observations")
+api.ip = "2001:4860::1"
+routes.connectivity = [website, api]
+routes.udp = [api.ip!]
+routes.risk = IPRiskDetails(ip: website.ip, countryCode: "US", is_datacenter: true)
+assert(routes.claudeRiskClues.map { $0.id } == ["hosting"], "hosting warns independently while dual stack alone does not")
+routes.udpExits = [IPExit(name: "UDP", ip: api.ip, country: "JP")]
+assert(routes.environmentRiskClues.contains { $0.id == "webrtc" && $0.detail.contains("IPv6") })
+routes.risk?.abuseLevel = "high"
+assert(routes.claudeRiskClues.contains { $0.id == "address-abuse" })
+routes.risk?.ip = "8.8.8.9"
+assert(!routes.claudeRiskClues.contains { $0.id == "address-abuse" })
+print("PASS API domain routing, confirmed slow responses, dual-stack paths and scoped abuse records")
+
+// Match the public site's example without treating ASN statistics as device telemetry.
+var usage = snapshot(now, ip: "23.224.250.74")
+usage.risk = try JSONDecoder().decode(IPRiskDetails.self, from: Data(#"{"ip":"23.224.250.74","countryCode":"us","registered_country_code":"us","is_datacenter":true,"company_type":"hosting","asn":40065,"trust_score":74,"abuser_score":"0.0088 (Elevated)"}"#.utf8))
+usage.usageRadar = IPUsageRadar(asn: 40065, ok: true, human: 23.92, range: "28d")
+assert(usage.usageNative?.same == true)
+assert(usage.usageHuman?.percent == 23.92)
+assert(usage.usageScenes.map { $0.score } == [5, 5, 6])
+let savedUsage = try JSONDecoder().decode(IPAssessmentResult.self, from: JSONEncoder().encode(usage))
+assert(savedUsage.usageScenes.map { $0.score } == [5, 5, 6] && savedUsage.usageHuman?.percent == 23.92)
+usage.usageRadar?.asn = 40066
+assert(usage.usageHuman?.percent == 18, "wrong ASN is ignored, fallback explicitly uses type estimate")
+usage.risk?.is_proxy = true
+assert(abs(usage.usageHuman!.percent - 10.8) < 0.001)
+usage.risk?.registeredCountry = nil
+assert(usage.usageNative == nil)
+usage.risk?.sceneTrustScore = nil
+assert(usage.usageScenes.isEmpty)
+usage.risk?.ip = "23.224.250.75"
+assert(usage.usageHuman == nil && usage.usageScenes.isEmpty)
+var usageV6 = usage
+usageV6.exits[0].ip = "2001:4860::1"
+usageV6.risk?.ip = "2001:4860::1"
+assert(usageV6.usageHuman == nil && usageV6.usageScenes.isEmpty)
+print("PASS usage source example, history persistence, ASN scope, missing fields and IPv6 omission")
+
+assert(currentHosting.claudeRiskClues.contains { $0.id == "hosting" && $0.kind == .review })
+assert(!currentHome.claudeRiskClues.contains { $0.id == "hosting" })

@@ -41,13 +41,24 @@ private enum IPValue: Decodable {
         default: return nil
         }
     }
+    var number: Double? {
+        switch self {
+        case .number(let value): return value.isFinite ? value : nil
+        case .text(let value): return Double(value.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? "")
+        default: return nil
+        }
+    }
+    var preciseText: String? {
+        if case .number(let value) = self { return value.isFinite ? String(value) : nil }
+        return text
+    }
     var object: [String: IPValue] { if case .object(let value) = self { return value }; return [:] }
     var array: [IPValue] { if case .array(let value) = self { return value }; return [] }
 }
 
 extension IPRiskDetails {
     var hasInformation: Bool {
-        countryCode != nil || asn != nil || [isResidential, is_datacenter, is_vpn, is_proxy, is_tor, is_crawler, is_abuser].contains(where: { $0 != nil }) || signals?.isEmpty == false || evidence?.isEmpty == false
+        countryCode != nil || asn != nil || abuseLevel != nil || abuseScoreRaw != nil || honeypotThreat != nil || [isResidential, is_datacenter, is_vpn, is_proxy, is_tor, is_crawler, is_abuser].contains(where: { $0 != nil }) || signals?.isEmpty == false || evidence?.isEmpty == false
     }
 
     init(from decoder: Decoder) throws {
@@ -81,17 +92,23 @@ extension IPRiskDetails {
             company_type: text("company_type") ?? company["type"]?.text,
             timezone: text("timezone")
         )
-        let keys = ["is_relay", "is_mobile", "is_bogon", "isBroadcast", "is_satellite", "is_public_proxy", "is_residential_proxy", "is_anonymous", "is_spam", "is_attacker"]
+        let keys = ["is_public_service", "is_anycast", "is_relay", "is_mobile", "is_bogon", "isBroadcast", "is_satellite", "is_public_proxy", "is_residential_proxy", "is_anonymous", "is_spam", "is_attacker"]
         var signals = raw["signals"]?.object.compactMapValues { $0.bool } ?? [:]
         for key in keys { if let value = flag(key) { signals[key] = value } }
         self.signals = signals
         datacenterName = text("datacenterName") ?? text("datacenter_name")
         reverseDNS = text("reverseDNS") ?? text("rdns")
         asnKind = text("asnKind") ?? text("asn_kind")
-        registeredCountry = text("registeredCountry") ?? text("registered_country")
+        registeredCountry = text("registeredCountry") ?? text("registered_country_code") ?? text("registered_country")
         rpki = text("rpki") ?? text("rpki_status")
-        let threats = raw["evidence"]?.array ?? raw["intelligence"]?.object["threats"]?.array ?? []
-        evidence = threats.compactMap {
+        let intel = raw["intelligence"]?.object ?? [:]
+        isp = text("isp")
+        abuseLevel = text("abuseLevel") ?? intel["abuser_level"]?.text
+        abuseScoreRaw = raw["abuseScoreRaw"]?.preciseText ?? intel["abuser_score_raw"]?.preciseText ?? raw["abuser_score"]?.preciseText
+        sceneTrustScore = raw["sceneTrustScore"]?.number ?? raw["trust_score"]?.number
+        honeypotThreat = raw["honeypotThreat"]?.number ?? intel["rep_threat"]?.number ?? intel["httpbl_threat"]?.number
+        let threats = raw["evidence"]?.array ?? intel["threats"]?.array
+        evidence = threats?.compactMap {
             guard let label = $0.object["label"]?.text, !label.isEmpty else { return nil }
             return IPRiskEvidence(label: label, severity: $0.object["severity"]?.text)
         }
@@ -176,8 +193,10 @@ extension IPAssessmentHTTP {
     static func udpMessage(_ addresses: [String], claudeIP: String?, error: String?) -> String {
         if let error { return "WebRTC 探测未完成 · " + error }
         guard !addresses.isEmpty else { return "未观察到公网 UDP 候选地址，无法判断是否泄露" }
-        guard let claudeIP else { return "已取得 UDP 出口，Claude HTTP 出口未知，无法比较" }
-        return addresses.contains(where: { $0 != claudeIP }) ? "存在与 Claude HTTP 不同的 UDP 出口，请核对分流" : "本次观察到的 UDP 与 Claude HTTP 出口一致"
+        guard let claude = claudeIP.flatMap(IPsumFeed.canonical) else { return "已取得 UDP 出口，Claude HTTP 出口未知，无法比较" }
+        let comparable = addresses.compactMap(IPsumFeed.canonical).filter { $0.contains(":") == claude.contains(":") }
+        guard !comparable.isEmpty else { return "UDP 与网页使用不同地址协议，无法直接比较地址" }
+        return comparable.contains(where: { $0 != claude }) ? "存在与 Claude HTTP 不同的 UDP 出口，请核对分流" : "同协议族的 UDP 与 Claude HTTP 出口一致"
     }
 }
 
@@ -188,7 +207,7 @@ extension IPAssessmentResult {
         let sourceName = locationTimezone ?? rules?.timezones[claudeCountry?.uppercased() ?? ""]
         guard let sourceName, let remote = TimeZone(identifier: sourceName) else { return "Claude 出口时区未知" }
         let difference = remote.secondsFromGMT(for: date) - local.secondsFromGMT(for: date)
-        let match = abs(difference) <= 3600
+        let match = difference == 0
         let estimate = locationTimezone == nil ? "（参考地区估算）" : ""
         return "\(match ? "UTC 偏移相近" : "UTC 偏移不同") · \(localName) ↔ \(sourceName)\(estimate) · 相差 \(String(format: "%.1f", Double(abs(difference)) / 3600)) 小时"
     }

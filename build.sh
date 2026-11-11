@@ -17,6 +17,8 @@ xcrun swiftc -O -parse-as-library \
 cp Info.plist "$APP/Contents/Info.plist"
 cp Resources/IPProbe.html "$APP/Contents/Resources/"
 cp Resources/LinkTargets.json "$APP/Contents/Resources/"
+mkdir -p "$APP/Contents/Resources/SiteIcons"
+cp Resources/SiteIcons/*.png "$APP/Contents/Resources/SiteIcons/"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 codesign --force -s - "$APP" 2>/dev/null || true
 

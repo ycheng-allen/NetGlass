@@ -10,7 +10,7 @@ struct NetworkConnectivityPage: View {
             HStack(spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("测试当前网络到各站点的 HTTP 响应耗时").font(.system(size: 13, weight: .medium))
-                    Text("每站预热后测量 8 轮，显示成功请求的中位数 · 最多 9 站并发")
+                    Text("每站测量 \(NetworkConnectivity.rounds) 次 · 成功响应耗时中位数 · 最多 9 站同时检测")
                         .font(.system(size: 11)).foregroundStyle(palette.sub)
                 }
                 Spacer()
@@ -38,6 +38,7 @@ struct NetworkConnectivityPage: View {
             ForEach(ConnectivityCatalog.groups, id: \.0) { group in groupSection(group.0, title: group.1) }
             VStack(alignment: .leading, spacing: 8) {
                 Text(model.catalogMessage).font(.system(size: 10)).foregroundStyle(palette.sub)
+                if let duration = model.duration { Text(String(format: "本轮用时 %.1f 秒", duration)).font(.system(size: 11)).foregroundStyle(palette.sub) }
                 if let date = model.checkedAt { Text("最近测试开始于 " + date.formatted()).font(.system(size: 10)).foregroundStyle(palette.sub) }
                 DisclosureGroup("测试方式与结果含义") {
                     Text("由 NetGlass 直接请求各站的轻量端点或 CDN 图标，单次约 2.5 秒超时。取得 HTTP 响应即计入可达，403、404 等状态可在圆点提示中查看，不能据此确认业务可用。结果包含 DNS、TLS、连接及响应传输耗时。其他浏览器可能使用不同代理；超时也可能是探测受限。每次全部测试重新检查参考站列表，失败时保留当前列表。")
@@ -81,7 +82,8 @@ struct NetworkConnectivityPage: View {
         let samples = model.samples[target.id] ?? []
         let median = NetworkConnectivity.median(samples)
         return VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(spacing: 10) {
+                siteIcon(target)
                 Text(target.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Spacer()
                 Text(median.map { String(format: "%.0f ms", $0) } ?? (samples.isEmpty ? "待测" : "失败"))
@@ -100,6 +102,20 @@ struct NetworkConnectivityPage: View {
                     .font(.system(size: 9)).foregroundStyle(palette.sub)
             }
         }.padding(14).background(palette.bg, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func siteIcon(_ target: ConnectivityTarget) -> some View {
+        Group {
+            if let file = target.icon,
+               let url = Bundle.main.url(forResource: file, withExtension: nil, subdirectory: "SiteIcons"),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image).resizable().scaledToFit().padding(5)
+            } else {
+                Text(String(target.name.prefix(1))).font(.system(size: 15, weight: .semibold)).foregroundStyle(palette.accent)
+            }
+        }.frame(width: 32, height: 32)
+            .background(.white.opacity(0.95), in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityHidden(true)
     }
 
     private func sampleDescription(_ sample: ConnectivitySample, index: Int) -> String {

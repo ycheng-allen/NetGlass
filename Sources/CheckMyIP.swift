@@ -197,6 +197,10 @@ extension IPRiskDetails {
         network.is_abuser = nil
         network.signals = signals?.filter { $0.key == "is_mobile" }
         network.evidence = nil
+        network.abuseLevel = nil
+        network.abuseScoreRaw = nil
+        network.honeypotThreat = nil
+        network.sceneTrustScore = nil
         network.reverseDNS = nil
         return (network, "Net.Coffee 返回同网段的代表记录；地址级 VPN、代理、Tor、爬虫与滥用标记已忽略。归属和网络分类仅作网段参考。")
     }
@@ -213,6 +217,9 @@ extension IPAssessmentResult {
                 snapshot.risk = nil
                 snapshot.riskSourceNote = "历史记录的属性地址无法与 Claude 出口匹配，已忽略，请重新评估。"
             }
+        }
+        if !udp.isEmpty {
+            snapshot.udpMessage = IPAssessmentHTTP.udpMessage(udp, claudeIP: exits.first { $0.name == "Claude" }?.ip, error: browserError)
         }
         if !dns.isEmpty {
             snapshot.dnsMessage = IPAssessmentHTTP.dnsMessage(dns, claudeCountry: snapshot.claudeCountry)
@@ -255,5 +262,6 @@ extension IPAssessmentResult {
          checkedIP?.risk?.is_vpn, checkedIP?.risk?.is_proxy, checkedIP?.risk?.is_tor, checkedIP?.risk?.is_relay,
          checkedIP?.risk?.is_datacenter].contains { $0 != nil }
         || risk?.signals?.isEmpty == false || risk?.evidence?.isEmpty == false || ipsum?.occurrences != nil
+        || risk?.abuseLevel != nil || risk?.abuseScoreRaw != nil || risk?.honeypotThreat != nil || risk?.rpki != nil
     }
 }

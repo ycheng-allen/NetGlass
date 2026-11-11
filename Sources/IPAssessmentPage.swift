@@ -13,8 +13,8 @@ struct IPAssessmentPage: View {
                 HStack(spacing: 14) {
                     Image(systemName: "globe").font(.system(size: 22)).foregroundStyle(palette.accent)
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Claude风险检测").font(.system(size: 18, weight: .semibold))
-                        Text(model.running ? model.phase : "每次点击重新查询出口、IP 属性和实时探测结果")
+                        Text("Claude 风险检测").font(.system(size: 18, weight: .semibold))
+                        Text(model.running ? model.phase : model.result.map { "评估于 " + $0.date.formatted(date: .abbreviated, time: .standard) } ?? "检查当前出口、网络路径与 IP 信誉")
                             .font(.system(size: 11)).foregroundStyle(palette.sub)
                     }
                     Spacer()
@@ -32,28 +32,24 @@ struct IPAssessmentPage: View {
                 }.font(.system(size: 10)).foregroundStyle(palette.sub)
             }
             if let result = model.result {
-                HStack {
-                    Label(result.date.formatted(date: .abbreviated, time: .standard), systemImage: "clock")
-                    Spacer()
-                    Text("本次查询时间 · 各来源更新时间见详情")
-                }.font(.system(size: 10)).foregroundStyle(palette.sub)
-                if result.exits.contains(where: { $0.ip?.contains(":") == true }) {
-                    Label("本轮包含 IPv6 出口，部分属性或探测可能缺失", systemImage: "info.circle")
-                        .font(.system(size: 11)).foregroundStyle(palette.up)
-                }
-                IPRiskOverview(result: result)
+                IPRiskOverview(result: result, history: model.history, evaluating: model.running)
                 if result.exits.contains(where: { $0.ip != nil && $0.name != "Anthropic" }) { exits(result) }
-                HStack(alignment: .top, spacing: 20) {
-                    if result.risk != nil || result.checkedIP != nil { attributes(result).frame(maxWidth: .infinity) }
-                    if result.hasRiskResults { riskFlags(result).frame(maxWidth: .infinity) }
+                if result.connectivity != nil || result.serviceDetails != nil { connectivity(result) }
+                if result.hasRiskResults {
+                    DisclosureGroup("IP 情报（威胁指标）") { riskFlags(result).padding(.top, 8) }
                 }
-                if result.checkedIP != nil { checkMyIP(result) }
-                if result.serviceDetails != nil || (result.connectivity ?? []).contains(where: { $0.milliseconds != nil }) { connectivity(result) }
-                HStack(alignment: .top, spacing: 20) {
-                    if !result.dns.isEmpty { dns(result).frame(maxWidth: .infinity) }
-                    if !result.udp.isEmpty { udp(result).frame(maxWidth: .infinity) }
+                if !result.dns.isEmpty || !result.udp.isEmpty || !result.device.isEmpty {
+                    DisclosureGroup("DNS、WebRTC 与设备明细") {
+                        VStack(spacing: 12) {
+                            if !result.dns.isEmpty { dns(result) }
+                            if !result.udp.isEmpty { udp(result) }
+                            if !result.device.isEmpty { device(result) }
+                        }.padding(.top, 8)
+                    }
                 }
-                if !result.device.isEmpty { device(result) }
+                if result.checkedIP != nil {
+                    DisclosureGroup("数据来源与定位详情") { checkMyIP(result).padding(.top, 8) }
+                }
             } else if !model.running {
                 card {
                     VStack(spacing: 12) {
@@ -63,13 +59,11 @@ struct IPAssessmentPage: View {
                     }.frame(maxWidth: .infinity).padding(.vertical, 24)
                 }
             }
-            exitHistory
-            history
-            HStack(spacing: 16) {
-                Link("功能参考 Net.Coffee", destination: URL(string: "https://ip.net.coffee/claude/")!)
-                Link("官方地区条款", destination: URL(string: "https://www.anthropic.com/legal/supported-regions")!)
-                Link("Anthropic 服务状态", destination: URL(string: "https://status.claude.com/")!)
-            }.font(.system(size: 10)).foregroundStyle(palette.sub)
+            if !model.history.isEmpty {
+                DisclosureGroup("历史记录（\(model.history.count)）") {
+                    VStack(spacing: 12) { exitHistory; history }.padding(.top, 8)
+                }
+            }
         }.tint(palette.accent)
             .alert("清空本地 IP 评估历史？", isPresented: $confirmClear) {
                 Button("取消", role: .cancel) {}
@@ -110,7 +104,6 @@ struct IPAssessmentPage: View {
             HStack {
                 Label("出口 IP", systemImage: "arrow.up.right.circle").font(.system(size: 14, weight: .semibold))
                 Spacer()
-                Text(result.serviceStatus ?? "").font(.system(size: 11)).foregroundStyle(palette.sub)
             }
             HStack(alignment: .top, spacing: 16) {
                 ForEach(result.exits.filter { $0.name != "Anthropic" && $0.ip != nil }) { exit in
@@ -137,61 +130,6 @@ struct IPAssessmentPage: View {
                         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(exit.name == "Claude" ? palette.accent.opacity(0.35) : .clear))
                 }
             }
-            Text("HTTP trace 响应表示端点可达，业务登录与 Claude 使用可用性需要单独验证。")
-                .font(.system(size: 10)).foregroundStyle(palette.sub)
-        }
-    }
-
-    private func typeColor(_ type: IPNetworkType) -> Color {
-        switch type.kind {
-        case .hosting, .conflict: return palette.up
-        case .residential: return palette.down
-        default: return palette.accent
-        }
-    }
-
-    private func attributes(_ result: IPAssessmentResult) -> some View {
-        let type = result.networkType
-        return card {
-            Label("Claude AI 出口 IP 属性", systemImage: "mappin.and.ellipse").font(.system(size: 14, weight: .semibold))
-            HStack {
-                if type.kind != .unknown {
-                Text("IP 属性").font(.system(size: 12)).foregroundStyle(palette.sub)
-                Spacer()
-                Label(type.title, systemImage: type.kind == .residential ? "house.fill" : "network")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(typeColor(type))
-                    .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(typeColor(type).opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-            }
-                }
-            line("地区", value: result.claudeCountry.map(countryLabel) ?? result.risk?.country)
-            line("城市", value: [result.locationRegion, result.locationCity].compactMap { $0 }.joined(separator: " · "))
-            line("ASN", value: result.locationASN.map { "AS\($0)" })
-            line("运营商", value: result.locationOrganization)
-            Divider()
-            if type.kind != .unknown || result.risk != nil {
-            DisclosureGroup("分类依据与网络详情") {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(type.kind == .unknown ? [] : type.evidence, id: \.self) { evidence in
-                        Label(evidence, systemImage: "info.circle").font(.system(size: 11)).foregroundStyle(palette.sub)
-                    }
-                    line("公司", value: result.risk?.company_name)
-                    line("公司类型", value: result.risk?.company_type)
-                    line("ASN 类型", value: result.risk?.asnKind)
-                    line("机房名称", value: result.risk?.datacenterName)
-                    line("IP 时区", value: result.locationTimezone)
-                    line("注册国家", value: result.risk?.registeredCountry)
-                    line("反向 DNS", value: (result.checkedIP?.hostname ?? result.risk?.reverseDNS).map { hideIPs ? "已隐藏" : $0 })
-                    line("路由认证", value: result.risk?.rpki)
-                    if let cidr = result.risk?.cidr { line("来源匹配网段", value: hideIPs ? "••••••••" : cidr) }
-                    line("住宅标记", value: result.risk?.isResidential.map { $0 ? "来源标记为住宅" : "来源未标记为住宅" })
-                    Text("分类规则 ip-type-v2 · 结合来源证据；名称推断会单独注明")
-                        .font(.system(size: 10)).foregroundStyle(palette.sub)
-                }.padding(.top, 12)
-            }.font(.system(size: 11))
-            }
-            if let rules = result.rules, result.claudeCountry != nil { Text(rules.region(result.claudeCountry)).font(.system(size: 11)).foregroundStyle(palette.sub) }
-            if let message = visibleValue(result.regionMessage) { DisclosureGroup("官方地区政策") { Text(message).font(.system(size: 11)).foregroundStyle(palette.sub).padding(.top, 6) }.font(.system(size: 11)) }
         }
     }
 
@@ -212,7 +150,6 @@ struct IPAssessmentPage: View {
 
     private func riskFlags(_ result: IPAssessmentResult) -> some View {
         card {
-            Label("安全检测", systemImage: "shield.lefthalf.filled").font(.system(size: 14, weight: .semibold))
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 ForEach(["VPN", "代理 Proxy", "Tor", "Private Relay"].filter { result.combinedRisk($0) != nil }, id: \.self) { name in
                     VStack(alignment: .leading, spacing: 4) {
@@ -224,17 +161,27 @@ struct IPAssessmentPage: View {
                 riskTile("滥用记录", value: result.risk?.is_abuser)
                 riskTile("保留地址 Bogon", value: result.risk?.signals?["is_bogon"])
             }
+            line("滥用等级 · 来源原文", value: result.risk?.abuseLevel)
+            line("滥用指标 · 原始值", value: result.risk?.abuseScoreRaw)
+            if let value = result.risk?.honeypotThreat {
+                line("HTTP 蜜罐指标", value: String(format: "%.2f / 10 · 原始值 %.2f", min(10, max(0, value / 25.5)), value))
+            }
+            line("RPKI 路由授权", value: result.risk?.rpki)
+            if result.risk?.abuseLevel != nil || result.risk?.honeypotThreat != nil || result.risk?.rpki != nil {
+                Text("Net.Coffee 返回的第三方指标，尺度各不相同；RPKI Invalid 也可能源于配置错误，不直接表示滥用或账号风险。").font(.system(size: 10)).foregroundStyle(palette.sub)
+            }
             if result.ipsum?.occurrences != nil { ipsum(result.ipsum) }
+            if let data = result.checkedIP, data.checkedLists > 0 { dnsbl(data) }
             DisclosureGroup("更多标记与来源依据") {
                 VStack(alignment: .leading, spacing: 12) {
-                    flag("Net.Coffee 数据中心", value: result.risk?.is_datacenter)
-                    flag("CheckMyIP 数据中心名单", value: result.checkedIP?.risk?.is_datacenter)
-                    flag("移动网络", value: result.risk?.signals?["is_mobile"])
-                    flag("广播网络标记", value: result.risk?.signals?["isBroadcast"])
                     ForEach(extraSignals(result), id: \.0) { item in flag(item.0, value: item.1) }
                     ForEach(result.risk?.evidence ?? []) { item in
                         Label(item.label, systemImage: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(palette.up)
                     }
+                    ForEach(Array((result.checkedIP?.risk?.factors ?? []).enumerated()), id: \.offset) { _, factor in
+                        Text([factor.label, factor.source].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(palette.sub)
+                    }
+                    Link("Net.Coffee IP 情报来源", destination: URL(string: "https://ip.net.coffee/ip/")!).font(.system(size: 10))
                     if let date = result.riskCheckedAt { Text("来源查询于 \(date.formatted())").font(.system(size: 10)).foregroundStyle(palette.sub) }
                 }.padding(.top, 12)
             }.font(.system(size: 11))
@@ -300,12 +247,26 @@ struct IPAssessmentPage: View {
                             Text([hosted.source, hosted.freshness, hosted.error].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(palette.sub)
                         }
                         ForEach(data.type?.reasons ?? [], id: \.self) { Text($0).font(.system(size: 10)).foregroundStyle(palette.sub) }
-                        ForEach(Array((data.risk?.factors ?? []).enumerated()), id: \.offset) { _, factor in
-                            Text([factor.label, factor.source].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(palette.sub)
-                        }
+
                     }.padding(.top, 12)
                 }.font(.system(size: 11))
-                if data.checkedLists > 0 {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let observed = result.checkMyIP { Text("本轮查询 · " + observed.checkedAt.formatted()) }
+                    Text([data.generated_at.map { "来源生成 · " + $0 }, data.cache.map { "缓存策略 " + $0 }].compactMap { $0 }.joined(separator: " · "))
+                    Text("每次评估重新请求；CheckMyIP 及其上游仍可能返回缓存资料。")
+                    HStack {
+                        Link("CheckMyIP", destination: URL(string: "https://checkmyip.com/zh-cn")!)
+                        Link("IP Geolocation by DB-IP · CC BY 4.0", destination: URL(string: "https://db-ip.com")!)
+                        Link("IP2Location.io", destination: URL(string: "https://www.ip2location.io")!)
+                        Link("iptoasn · PDDL", destination: URL(string: "https://iptoasn.com")!)
+                    }
+                }.font(.system(size: 10)).foregroundStyle(palette.sub)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dnsbl(_ data: CheckMyIPResponse) -> some View {
                 Divider()
                 HStack {
                     Label("DNSBL 名单核查", systemImage: "checklist").font(.system(size: 12, weight: .medium))
@@ -328,20 +289,7 @@ struct IPAssessmentPage: View {
                 }.font(.system(size: 11))
                 Text("网段／ASN 关联命中单独展示，不计作此地址命中；DNSBL 覆盖垃圾邮件和滥用等不同范围。未命中不能排除代理。")
                     .font(.system(size: 10)).foregroundStyle(palette.sub)
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    if let observed = result.checkMyIP { Text("本轮查询 · " + observed.checkedAt.formatted()) }
-                    Text([data.generated_at.map { "来源生成 · " + $0 }, data.cache.map { "缓存策略 " + $0 }].compactMap { $0 }.joined(separator: " · "))
-                    Text("每次评估重新请求；CheckMyIP 及其上游仍可能返回缓存资料。")
-                    HStack {
-                        Link("CheckMyIP", destination: URL(string: "https://checkmyip.com/zh-cn")!)
-                        Link("IP Geolocation by DB-IP · CC BY 4.0", destination: URL(string: "https://db-ip.com")!)
-                        Link("IP2Location.io", destination: URL(string: "https://www.ip2location.io")!)
-                        Link("iptoasn · PDDL", destination: URL(string: "https://iptoasn.com")!)
-                    }
-                }.font(.system(size: 10)).foregroundStyle(palette.sub)
-            }
-        }
+
     }
 
     private func ipsum(_ observation: IPsumObservation?) -> some View {
@@ -397,7 +345,6 @@ struct IPAssessmentPage: View {
                 }
             }
             }
-            Link("DNS 安全详细查询", destination: URL(string: "https://ip.net.coffee/dns/")!).font(.system(size: 11))
             Text("通过随机子域名与 Net.Coffee 权威 DNS 结果接口现场探测。观测对象是解析器出口，不能单凭地理位置判断 DNS 泄露。")
                 .font(.system(size: 10)).foregroundStyle(palette.sub)
         }
@@ -416,7 +363,6 @@ struct IPAssessmentPage: View {
                     }
                 }
             }
-            Link("WebRTC 深度查询", destination: URL(string: "https://ip.net.coffee/webrtc/")!).font(.system(size: 11))
             Text("使用 Cloudflare 与 Google STUN 采集 WebKit 的反射候选地址。")
                 .font(.system(size: 10)).foregroundStyle(palette.sub)
         }
@@ -466,21 +412,27 @@ struct IPAssessmentPage: View {
     }
 
     private func connectivity(_ result: IPAssessmentResult) -> some View {
-        card {
+        let probes = result.connectivity ?? result.exits.filter { $0.name == "Claude" || $0.name == "Anthropic" }
+        return card {
             HStack {
                 Label("Claude 连通性与服务状态", systemImage: "waveform.path.ecg").font(.system(size: 14, weight: .semibold))
                 Spacer()
                 if model.connectivityRunning { ProgressView().controlSize(.small) }
                 Button("刷新连通性") { model.refreshConnectivity() }.controlSize(.small).disabled(model.running || model.connectivityRunning)
             }
-            ForEach((result.connectivity ?? result.exits.filter { $0.name == "Claude" || $0.name == "Anthropic" }).filter { $0.milliseconds != nil }) { exit in
-                line(exit.name == "Claude" ? "claude.ai" : "anthropic.com", value: exit.milliseconds.map { time in
-                    (time < 250 ? "正常" : (time < 500 ? "良好" : "较慢")) + String(format: " · %.0f ms", time)
-                } ?? "探测失败 · " + (exit.error ?? "未知原因"), color: exit.milliseconds == nil ? palette.up : palette.accent)
+            ForEach(probes.filter { $0.ip != nil }) { exit in
+                HStack {
+                    Text(exit.name == "Claude API" ? "api.anthropic.com" : exit.name == "Claude" ? "claude.ai" : "www.anthropic.com")
+                    Spacer()
+                    Text(address(exit.ip)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    if let ms = exit.milliseconds {
+                        Text(String(format: "%.0f ms", ms)).monospacedDigit().foregroundStyle(palette.sub)
+                    }
+                }.font(.system(size: 12))
             }
-            if let date = result.connectivityDate { Text("HTTP 探测于 \(date.formatted())").font(.system(size: 10)).foregroundStyle(palette.sub) }
-            Text("HTTP 响应反映端点连通性，地区限制与业务登录另行核对。").font(.system(size: 10)).foregroundStyle(palette.sub)
-            Divider()
+            if let date = result.connectivityDate {
+                Text("NetGlass HTTP 探测 · " + date.formatted()).font(.caption).foregroundStyle(palette.sub)
+            }
             if let service = result.serviceDetails {
                 line("服务整体状态", value: service.status.indicator.map(statusLabel) ?? service.status.description)
                 DisclosureGroup("服务组件（\(service.components?.count ?? 0)）") {
@@ -508,6 +460,13 @@ struct IPAssessmentPage: View {
                 Label("Claude 出口 IP 历史", systemImage: "arrow.triangle.swap").font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Text("同一 IP 在 24 小时内合并 · 最近 6 条").font(.system(size: 10)).foregroundStyle(palette.sub)
+            }
+            if let result = model.result {
+                let stability = IPExitStability.analyze(current: result, history: model.history)
+                DisclosureGroup("出口稳定性判断规则") {
+                    Text("统计最近 1 小时内最多 30 条已保存评估，当前有效样本 \(stability.sampleCount) 条。连续、明确的机房记录至少切换 3 次才提醒；住宅、类型未知或冲突的记录会中断计数。家宽偶尔变化、家宽长期不变均不据此标记风险。采样之间的实际变化未知，这不是 Anthropic 官方风控阈值。")
+                        .font(.system(size: 10)).foregroundStyle(palette.sub).padding(.top, 8)
+                }.font(.system(size: 11))
             }
             if model.exitHistory.isEmpty { Text("尚无出口记录").font(.system(size: 11)).foregroundStyle(palette.sub) }
             ForEach(model.exitHistory) { item in

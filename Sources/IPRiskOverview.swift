@@ -2,18 +2,26 @@ import SwiftUI
 
 struct IPRiskOverview: View {
     let result: IPAssessmentResult
+    var history: [IPAssessmentResult] = []
+    var evaluating = false
+    private var displayedClues: [ClaudeRiskClue] {
+        let churn = IPExitStability.analyze(current: result, history: history).clue(current: result)
+        return result.claudeRiskClues.filter { churn == nil || $0.id != "hosting" } + [churn].compactMap { $0 }
+    }
     @Environment(\.colorScheme) private var scheme
     private var palette: Palette { Palette.for(scheme) }
     private var data: CheckMyIPResponse? { result.checkedIP }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            clues
             HStack(alignment: .top, spacing: 20) {
                 if data?.reputation.value != nil || data?.validRiskScore != nil { reputation.frame(maxWidth: .infinity) }
-                if let data, data.networkIdentity.name != "身份待确认" { identity.frame(maxWidth: .infinity) }
+                if data?.networkIdentity.name != nil && data?.networkIdentity.name != "身份待确认" || result.networkType.kind != .unknown { identity.frame(maxWidth: .infinity) }
             }
-            if result.checkMyIPBrowser?.hasVisibleResults == true { browserReputation }
-            if !result.claudeRiskClues.isEmpty { clues }
+            if result.checkMyIPBrowser?.hasVisibleResults == true {
+                DisclosureGroup("浏览器现场检查") { browserReputation.padding(.top, 8) }
+            }
         }
     }
 
@@ -91,48 +99,116 @@ struct IPRiskOverview: View {
     }
 
     private var identity: some View {
-        let identity = data?.networkIdentity
+        let identity = data?.networkIdentity ?? (name: result.networkType.title, icon: result.networkType.kind == .residential ? "house.fill" : "server.rack", detail: "Net.Coffee 网络归类")
         return panel {
-            Label("网络身份", systemImage: "person.crop.square.filled.and.at.rectangle").font(.system(size: 14, weight: .semibold))
+            Label("使用场景 / 类型", systemImage: "person.crop.square.filled.and.at.rectangle").font(.system(size: 14, weight: .semibold))
             HStack(spacing: 16) {
-                Image(systemName: identity?.icon ?? "questionmark.circle").font(.system(size: 34)).foregroundStyle(palette.accent)
+                Image(systemName: identity.icon).font(.system(size: 34)).foregroundStyle(palette.accent)
                     .frame(width: 68, height: 68).background(palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(identity?.name ?? "身份待确认").font(.system(size: 20, weight: .semibold))
-                    Text(identity?.detail ?? "等待 CheckMyIP 指定地址数据").font(.system(size: 10)).foregroundStyle(palette.sub).fixedSize(horizontal: false, vertical: true)
-                    Text("数据来源 · CheckMyIP").font(.system(size: 10)).foregroundStyle(palette.accent)
+                    Text(identity.name).font(.system(size: 20, weight: .semibold))
+                    Text(identity.detail).font(.system(size: 10)).foregroundStyle(palette.sub).fixedSize(horizontal: false, vertical: true)
+                    Text(data == nil ? "数据来源 · Net.Coffee" : "类型 · CheckMyIP　详情 · Net.Coffee").font(.system(size: 10)).foregroundStyle(palette.accent)
                 }
             }
-            HStack(spacing: 5) {
-                routeNode("本机", icon: "laptopcomputer")
-                Image(systemName: "chevron.right").foregroundStyle(palette.sub)
-                routeNode(identity?.name ?? "出口", icon: identity?.icon ?? "network")
-                Image(systemName: "chevron.right").foregroundStyle(palette.sub)
-                routeNode("Claude", icon: "sparkles")
-            }.padding(14).background(palette.bg, in: RoundedRectangle(cornerRadius: 10))
-            Text("连接身份示意 · 不是路由追踪").font(.system(size: 9)).foregroundStyle(palette.sub)
-            HStack {
-                if let organization = result.locationOrganization { Label(organization, systemImage: "building.2") }
-                Spacer()
-                if let asn = result.locationASN { Text("AS\(asn)") }
-            }.font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
-            if let consensus = data?.geo?.consensus, let sources = consensus.source_count, sources > 0, consensus.agreement_count != nil {
-                HStack {
-                    Label("定位共识", systemImage: "mappin.and.ellipse")
-                    Spacer()
-                    Text(consensus.countryVoteSummary)
-                }.font(.system(size: 11))
-                ProgressView(value: Double(consensus.agreement_count ?? 0), total: Double(max(1, consensus.source_count ?? 0))).tint(palette.accent)
+            if let origin = result.usageNative {
+                usageRow("IP 原生性", regionName(origin.country) + " · " + (origin.same ? "原生 IP" : "广播 IP（注册于 " + regionName(origin.registration) + "）"))
+                    .help("按 Net.Coffee 规则比较定位地区与注册地区。")
             }
-            if let data, data.checkedLists > 0 {
-            HStack {
-                Label("地址名单", systemImage: "checklist")
-                Spacer()
-                Text("\(data.directHits) 项命中 · \(data.checkedLists) 项完成")
+            if let risk = result.risk {
+                usageRow("标记", result.networkType.title)
+                usageRow("运营商类型", risk.company_type.map { $0.capitalized })
+                usageRow("服务商", risk.isp ?? risk.asOrganization ?? risk.company_name)
+            }
+            if let traffic = result.usageHuman { humanTraffic(traffic.percent, source: traffic.source) }
+            if !result.usageScenes.isEmpty { usageScenes }
+            if IPExitStability.confirmedHosting(result) {
+                let stability = IPExitStability.analyze(current: result, history: history)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: stability.hostingChanges >= IPExitStability.changeThreshold ? "exclamationmark.arrow.triangle.2.circlepath" : "clock.arrow.circlepath")
+                    Text("近 1 小时 · \(stability.sampleCount) 次有效采样 · \(stability.hostingChanges) 次机房 IP 切换")
+                        .fixedSize(horizontal: false, vertical: true)
+                }.font(.system(size: 10)).foregroundStyle(stability.hostingChanges >= IPExitStability.changeThreshold ? palette.up : palette.sub)
+                    .help("相邻记录均明确为机房时计数，达到 3 次切换会在风险区提醒。采样之间的变化未知。")
+            }
+            DisclosureGroup("类型来源与判断依据") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(result.networkType.evidence, id: \.self) { Text($0).font(.system(size: 10)).foregroundStyle(palette.sub) }
+                    Link("Net.Coffee 使用场景来源", destination: URL(string: "https://ip.net.coffee/ip/")!).font(.system(size: 10))
+                }.padding(.top, 8)
             }.font(.system(size: 11))
+        }
+    }
+
+    private func regionName(_ code: String) -> String {
+        let name = Locale(identifier: "zh_CN").localizedString(forRegionCode: code) ?? code
+        let flag = String(String.UnicodeScalarView(code.unicodeScalars.compactMap { UnicodeScalar(127397 + $0.value) }))
+        return flag + " " + name
+    }
+
+    private func humanTraffic(_ human: Double, source: String) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text("人机流量").foregroundStyle(palette.sub)
+                Spacer()
+                Label(human >= 55 ? "人类偏多" : human >= 40 ? "人机混合" : "机器偏多",
+                      systemImage: human >= 40 ? "person.fill" : "desktopcomputer")
+                    .foregroundStyle(human >= 55 ? palette.accent : palette.up)
+            }.font(.system(size: 11))
+            GeometryReader { geometry in
+                HStack(spacing: 0) {
+                    Rectangle().fill(palette.accent).frame(width: geometry.size.width * human / 100)
+                    Rectangle().fill(palette.up.opacity(0.75))
+                }.clipShape(Capsule())
+            }.frame(height: 8)
+            HStack {
+                Label(String(format: "人类 %.1f%%", human), systemImage: "person.fill").foregroundStyle(palette.accent)
+                Spacer()
+                Label(String(format: "机器 %.1f%%", 100 - human), systemImage: "desktopcomputer").foregroundStyle(palette.up)
+            }.font(.system(size: 10)).monospacedDigit()
+            Text(source).font(.system(size: 9)).foregroundStyle(palette.sub)
+        }.padding(12).background(palette.bg, in: RoundedRectangle(cornerRadius: 10))
+            .help("Net.Coffee 来源估计，描述 ASN 网络群体及 IP 标记，无法代表本机真实人机流量比例。")
+    }
+
+    private var usageScenes: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("场景评估").font(.system(size: 11, weight: .medium))
+                Image(systemName: "info.circle").foregroundStyle(palette.sub)
+                    .help("按 Net.Coffee 公开规则复算，满分 10 分。地区与 IP 属性推断的参考值，服务实际可用性需实测。")
             }
-            Text("网络类型、匿名工具、归属与名单复用同一次 CheckMyIP 查询。名称推断保留来源依据，未标记代理不等于直连或安全。")
-                .font(.system(size: 10)).foregroundStyle(palette.sub).fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(result.usageScenes) { scene in
+                    let color = scene.score >= 8 ? palette.accent : palette.up
+                    VStack(spacing: 7) {
+                        ZStack {
+                            Circle().stroke(palette.border, lineWidth: 5)
+                            Circle().trim(from: 0, to: CGFloat(scene.score) / 10)
+                                .stroke(color, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                            Text("\(scene.score)").font(.system(size: 22, weight: .semibold, design: .rounded))
+                        }.frame(width: 58, height: 58)
+                        Text(scene.name).font(.system(size: 11, weight: .medium))
+                        Text(scene.verdict).font(.system(size: 10)).foregroundStyle(color)
+                    }.frame(maxWidth: .infinity)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(scene.name)，\(scene.score) 分，满分 10 分，\(scene.verdict)")
+                }
+            }
+            Text("Net.Coffee 规则估算 · 实际可用性请以访问结果为准")
+                .font(.system(size: 9)).foregroundStyle(palette.sub)
+        }
+    }
+
+    @ViewBuilder
+    private func usageRow(_ title: String, _ value: String?) -> some View {
+        if let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            HStack(alignment: .top) {
+                Text(title).foregroundStyle(palette.sub)
+                Spacer()
+                Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)
+            }.font(.system(size: 11))
         }
     }
 
@@ -177,48 +253,47 @@ struct IPRiskOverview: View {
         }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(palette.bg, in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private func routeNode(_ name: String, icon: String) -> some View {
-        VStack(spacing: 8) {
-            Image(systemName: icon).font(.system(size: 21)).foregroundStyle(palette.accent)
-            Text(name).font(.system(size: 10)).multilineTextAlignment(.center)
-        }.frame(maxWidth: .infinity)
-    }
-
     private var clues: some View {
-        let items = result.claudeRiskClues
+        let items = displayedClues
+        let major = items.filter { $0.kind == .critical }
+        let priority = items.filter { $0.kind == .attention }
+        let review = items.filter { $0.kind == .review }
         return panel {
             HStack {
-                Label("Claude 使用风险线索", systemImage: "exclamationmark.bubble.fill").font(.system(size: 14, weight: .semibold))
+                Label("本次风险提示", systemImage: "shield.lefthalf.filled")
+                    .font(.system(size: 16, weight: .semibold))
                 Spacer()
-                Text("\(items.filter { $0.kind != .context }.count) 项待核对").font(.system(size: 11)).foregroundStyle(palette.up)
-            }
-            Text("突出可能与访问验证、出口信誉或地区限制有关的项目，供排查潜在账号使用风险。第三方 IP 数据不能预测封号，以下标签不代表 Claude 官方风控结论。")
-                .font(.system(size: 11)).foregroundStyle(palette.sub).fixedSize(horizontal: false, vertical: true)
-            if items.isEmpty {
-                Label("当前资料未发现上述重点线索；仍不能据此保证账号安全", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(palette.sub)
-            }
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
-                ForEach(items) { item in clue(item) }
-            }
-            Link("核对 Claude 官方支持地区", destination: URL(string: "https://www.anthropic.com/legal/supported-regions")!).font(.system(size: 10))
-        }
-    }
-
-    private func clue(_ item: ClaudeRiskClue) -> some View {
-        let color = item.kind == .context ? palette.accent : palette.up
-        return HStack(alignment: .top, spacing: 12) {
-            Image(systemName: item.icon).font(.system(size: 20)).foregroundStyle(color).frame(width: 26)
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(alignment: .top) {
-                    Text(item.title).font(.system(size: 12, weight: .medium))
-                    Spacer(minLength: 4)
-                    Text(item.kind == .attention ? "重点核对" : item.kind == .review ? "需要核对" : "环境参考")
-                        .font(.system(size: 9)).foregroundStyle(color).padding(.horizontal, 6).padding(.vertical, 3)
-                        .background(color.opacity(0.1), in: Capsule())
+                if !items.isEmpty {
+                    Text("\(items.count) 项").font(.callout.monospacedDigit()).foregroundStyle(palette.sub)
                 }
-                Text(item.detail).font(.system(size: 10)).foregroundStyle(palette.sub).fixedSize(horizontal: false, vertical: true)
             }
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
-            .background(palette.bg, in: RoundedRectangle(cornerRadius: 9))
+            if items.isEmpty {
+                Text(evaluating ? "正在比对出口和检测结果…" : "本次取得的数据未触发风险提示。")
+                    .font(.callout).foregroundStyle(palette.sub)
+            }
+            ForEach(major + priority + review) { item in
+                Divider()
+                HStack(alignment: .top, spacing: 12) {
+                    let color = item.kind == .critical || item.kind == .attention ? palette.danger : palette.up
+                    Image(systemName: item.icon).font(.system(size: 16)).foregroundStyle(color)
+                        .frame(width: 32, height: 32).background(color.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(item.title).font(.system(size: 13, weight: .semibold))
+                            Spacer()
+                            if item.kind == .critical {
+                                Text("重大风险").font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(palette.danger).padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(palette.danger.opacity(0.1), in: Capsule())
+                            } else {
+                                Text(item.evidence.rawValue).font(.caption).foregroundStyle(palette.sub)
+                            }
+                        }
+                        Text(item.detail).font(.system(size: 12)).foregroundStyle(palette.sub)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
     }
 }

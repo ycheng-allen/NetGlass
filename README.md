@@ -101,7 +101,8 @@ NetGlass/
 ├── Resources/
 │   ├── AppIcon.icns
 │   ├── IPProbe.html           # local WebKit environment and STUN probe
-│   └── LinkTargets.json       # 48 bundled connectivity targets
+│   ├── LinkTargets.json       # 60 bundled connectivity targets
+│   └── SiteIcons/             # bundled target icons
 ├── Scripts/
 │   ├── make_icon.swift        # CoreGraphics app-icon generator
 │   └── build_outbound.sh      # build, embed and sign the optional extension
@@ -128,7 +129,10 @@ NetGlass/
     ├── IPAssessment.swift / IPAssessmentDetails.swift / IPAssessmentPage.swift
     ├── IPReputation.swift / IPReputationSummary.swift / IPRiskOverview.swift
     ├── IPBrowserProbe.swift / CheckMyIPBrowserProbe.swift / CheckMyIP.swift
-    └── NetworkConnectivity.swift / NetworkConnectivityPage.swift
+    ├── NetworkConnectivity.swift / NetworkConnectivityPage.swift
+    ├── ClaudeAccountRisk.swift / ClaudeAccountPolicyView.swift
+    ├── IPEnvironmentRisk.swift
+    └── IPExitStability.swift / IPUsage.swift
 ```
 
 See [IP-detection research](IP检测功能复现调研.md) (Chinese) for the original source survey and remaining data gaps. The current implementation is described below.
@@ -165,6 +169,18 @@ Sources and attribution: [Net.Coffee](https://ip.net.coffee/claude/), [CheckMyIP
 
 ## Grouped network connectivity tests
 
-Open **Diagnostics → Network Connectivity Testing**. The bundled catalog has 48 targets grouped into China, Japan, US and Global. A full test refreshes the reference catalog; failure retains the current catalog and displays the reason.
+Open **Diagnostics → Network Connectivity Testing**. The bundled catalog has 60 targets grouped into China, Japan, US and Global. A full test refreshes the reference catalog; failure retains the current catalog and displays the reason.
 
-Each endpoint is warmed up, then tested over eight HTTP rounds with up to nine sites running concurrently. The page shows a median of response timings, per-round HTTP status/error details and group summaries, with full retest, group retest and stop controls. Any HTTP response, including an error status, counts as endpoint reachability. These are HTTP request timings on NetGlass’s route, rather than ICMP latency or bandwidth measurements.
+Each endpoint is tested over three HTTP rounds with up to nine sites running concurrently. Site icons are bundled, and no warm-up requests or inter-round delays are added. The page shows a median of response timings, per-round HTTP status/error details and group summaries, with full retest, group retest and stop controls. Any HTTP response, including an error status, counts as endpoint reachability. These are HTTP request timings on NetGlass’s route, rather than ICMP latency or bandwidth measurements.
+
+## Evidence behind account-risk flags
+
+The risk page leads with observed issues and their causes. It compares same-family exits across claude.ai, api.anthropic.com and www.anthropic.com. If the API host trace takes at least two seconds, NetGlass repeats it and flags latency only if both observations meet the threshold. VPN/hosting flags and DNS/time-zone differences are not treated as confirmed Claude violations. Official region matches require a parsed, applicable policy version tied to the assessed country; future versions and legacy unverified history cannot generate official-rule hits.
+
+See [account-risk evidence and limitations](Docs/Claude-account-risk.md) (Chinese), reviewed on 2026-11-11, for sources, effective-date handling and regression coverage.
+
+### Usage, threat evidence and exit stability
+
+The risk page prioritizes observed issues, with reputation, network identity, intelligence and history available on demand. Net.Coffee’s full lookup supplies usage types and address intelligence; subnet representative responses cannot transfer address-level threats or scenario scores. ASN Radar adds population-level human/bot estimates, with an explicitly labeled type-based fallback. TikTok, social-media and AI scenario scores reproduce the reference site’s heuristics, and do not measure account eligibility or application availability. Missing required data and IPv6 omit these estimates.
+
+Hosting exits receive a source-qualified warning. At least three changes between consecutive confirmed-hosting observations within the preceding hour produce a red local risk flag. The analysis uses at most 30 saved assessments, normalizes equivalent IP representations and excludes future, duplicate and out-of-window records. Residential, unknown or conflicting classifications break the sequence. These are local troubleshooting rules, not published Anthropic enforcement thresholds.
