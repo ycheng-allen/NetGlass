@@ -20,6 +20,12 @@
 | **菜单栏** | 实时 ⬇︎/⬆︎ 速率；左键弹出面板（30 分钟迷你图、Top3 应用、预算、暂停/打开窗口），右键显示传统菜单 |
 | **设置** | 采样间隔、历史保留天数、深色/浅色主题、开机自启、各类警报开关与 σ 阈值、月度预算与结算日、数据重置 |
 
+## 下载
+
+下载 [NetGlass v1.0.0 Apple Silicon 版](https://github.com/ycheng-allen/NetGlass/releases/download/v1.0.0/NetGlass-v1.0.0-macos-arm64.zip)，解压后将 `NetGlass.app` 移入 `/Applications`。要求 macOS 15 或更新版本。[发布说明与 SHA-256 校验文件](https://github.com/ycheng-allen/NetGlass/releases/tag/v1.0.0)见 GitHub Release。
+
+此普通构建使用 ad-hoc 签名，未经公证，macOS 首次打开时可能要求手动批准；不包含单独签名的出站过滤扩展。
+
 ## 构建与运行
 
 ```bash

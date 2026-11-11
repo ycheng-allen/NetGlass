@@ -20,6 +20,12 @@ A native macOS app inspired by [GlassWire](https://www.glasswire.com), recreatin
 | **Menu bar** | Live ⇩/⇧ rates in the menu bar. Left click opens a popover panel (30-min mini chart, top-3 apps, pause/open buttons, current budget); right click keeps the classic menu. |
 | **Settings** | Sampling interval, history retention, dark/light theme, launch at login, per-alert toggles, spike σ threshold, monthly budget and billing day, data reset. |
 
+## Download
+
+Download [NetGlass v1.0.0 for Apple Silicon](https://github.com/ycheng-allen/NetGlass/releases/download/v1.0.0/NetGlass-v1.0.0-macos-arm64.zip), unzip it and move `NetGlass.app` to `/Applications`. Requires macOS 15 or later. [Release notes and SHA-256 checksum](https://github.com/ycheng-allen/NetGlass/releases/tag/v1.0.0) are available on GitHub.
+
+This ordinary build is ad-hoc signed and is not notarized, so macOS may require manual approval before opening. It does not include the optional signed outbound-filter extension.
+
 ## Build & run
 
 ```bash
