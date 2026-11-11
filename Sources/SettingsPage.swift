@@ -69,7 +69,20 @@ struct SettingsPage: View {
                         }
                     }
 
+                    section("流量预算") {
+                        row("每月额度（GB，0 为关闭）") {
+                            TextField("GB", value: settings.budgetGB, format: .number)
+                                .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
+                                .frame(width: 100)
+                        }
+                        row("结算日") {
+                            Stepper("每月 \(state.settings.billingDay) 日", value: settings.billingDay, in: 1...28)
+                                .frame(width: 200)
+                        }
+                        Text(state.budgetText).font(.system(size: 11)).foregroundStyle(P.sub)
+                    }
                     section("警报") {
+                        row("应用行为变化") { Toggle("", isOn: settings.alertBehavior).labelsHidden() }
                         row("新应用开始联网") {
                             Toggle("", isOn: settings.alertNewApp).labelsHidden()
                         }

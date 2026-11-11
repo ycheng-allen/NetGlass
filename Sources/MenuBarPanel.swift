@@ -34,6 +34,8 @@ struct MenuBarPanel: View {
             MiniSparkline(buckets: series, palette: P)
                 .frame(height: 52)
 
+            if state.settings.budgetGB > 0 { Text(state.budgetText).font(.caption) }
+
             Text("Top 应用")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundColor(P.accent)

@@ -16,7 +16,7 @@ final class TrafficStore {
     private let lock = NSLock()
 
     var rawWindow: TimeInterval { 6 * 3600 }
-    var minuteWindow: TimeInterval { 24 * 3600 }
+    var minuteWindow: TimeInterval { 7 * 86400 }
 
     // MARK: Recording
 
@@ -31,7 +31,7 @@ final class TrafficStore {
         var hd = minuteHosts[m] ?? [:]
         for (k, v) in hosts { hd[k, default: Delta()].add(v) }
         minuteHosts[m] = hd
-        let d = Int(t.timeIntervalSince1970) / 86400 * 86400
+        let d = Int(Calendar.current.startOfDay(for: t).timeIntervalSince1970)
         var day = days[d] ?? DayUsage()
         for (k, v) in apps { day.apps[k, default: Delta()].add(v) }
         for (k, v) in hosts { day.hosts[k, default: Delta()].add(v) }
@@ -65,9 +65,9 @@ final class TrafficStore {
         case raw, minute, day
     }
 
-    private func source(for span: TimeInterval) -> Source {
-        if span <= rawWindow + 60 { return .raw }
-        if span <= minuteWindow + 60 { return .minute }
+    private func source(for window: SelectionWindow) -> Source {
+        if let first = raw.first, window.start >= first.t, window.span <= rawWindow { return .raw }
+        if window.start >= Date().addingTimeInterval(-minuteWindow), window.span <= minuteWindow { return .minute }
         return .day
     }
 
@@ -75,22 +75,20 @@ final class TrafficStore {
     private func forEachPoint(window: SelectionWindow, keyFilter: ((String) -> Bool)? = nil, _ body: (Date, String, Delta) -> Void) {
         lock.lock()
         defer { lock.unlock() }
-        switch source(for: window.span) {
+        switch source(for: window) {
         case .raw:
             for s in raw where s.t >= window.start && s.t <= window.end {
                 for (k, d) in s.apps where keyFilter?(k) ?? true { body(s.t, k, d) }
             }
         case .minute:
             let from = Int(window.start.timeIntervalSince1970) / 60 * 60
-            let to = Int(window.end.timeIntervalSince1970) / 60 * 60 + 60
-            for (m, dict) in minutes where m >= from && m <= to {
+            for (m, dict) in minutes where m >= from && m < Int(window.end.timeIntervalSince1970) {
                 let t = Date(timeIntervalSince1970: Double(m))
                 for (k, d) in dict where keyFilter?(k) ?? true { body(t, k, d) }
             }
         case .day:
-            let from = Int(window.start.timeIntervalSince1970) / 86400 * 86400
-            let to = Int(window.end.timeIntervalSince1970) / 86400 * 86400 + 86400
-            for (d, usage) in days where d >= from && d <= to {
+            let from = Int(Calendar.current.startOfDay(for: window.start).timeIntervalSince1970)
+            for (d, usage) in days where d >= from && d < Int(window.end.timeIntervalSince1970) {
                 let t = Date(timeIntervalSince1970: Double(d))
                 for (k, v) in usage.apps where keyFilter?(k) ?? true { body(t, k, v) }
                 for (k, v) in usage.hosts { body(t, "host:" + k, v) }
@@ -116,7 +114,7 @@ final class TrafficStore {
         for i in 0..<slots {
             let t0 = base + Double(i) * slotSpan
             // For day-level data place the day's average across its slot window.
-            let isDay = source(for: window.span) == .day
+            let isDay = source(for: window) == .day
             let norm = isDay ? max(slotSpan, 86400.0) : slotSpan
             out.append(Bucket(t: Date(timeIntervalSince1970: t0 + slotSpan / 2),
                               down: sums[i] / norm,
@@ -139,7 +137,8 @@ final class TrafficStore {
             guard idx >= 0, idx < slots else { return }
             sums[ki][idx] += Double(d.down + d.up)
         }
-        return sums.map { $0.map { $0 / slotSpan } }
+        let norm = source(for: window) == .day ? max(slotSpan, 86400) : slotSpan
+        return sums.map { $0.map { $0 / norm } }
     }
 
     /// Miniature overview across the whole retained history.
@@ -160,7 +159,7 @@ final class TrafficStore {
 
     func hostTotals(window: SelectionWindow) -> [String: Delta] {
         var out: [String: Delta] = [:]
-        if source(for: window.span) == .day {
+        if source(for: window) == .day {
             forEachPoint(window: window) { _, k, d in
                 if k.hasPrefix("host:") { out[String(k.dropFirst(5)), default: Delta()].add(d) }
             }
@@ -168,8 +167,7 @@ final class TrafficStore {
             lock.lock()
             defer { lock.unlock() }
             let from = Int(window.start.timeIntervalSince1970) / 60 * 60
-            let to = Int(window.end.timeIntervalSince1970) / 60 * 60 + 60
-            for (m, dict) in minuteHosts where m >= from && m <= to {
+            for (m, dict) in minuteHosts where m >= from && m < Int(window.end.timeIntervalSince1970) {
                 for (ip, d) in dict { out[ip, default: Delta()].add(d) }
             }
         }
@@ -188,7 +186,7 @@ final class TrafficStore {
     func firstSampleDate() -> Date? {
         lock.lock()
         defer { lock.unlock() }
-        return raw.first?.t
+        return days.keys.min().map { Date(timeIntervalSince1970: Double($0)) }
     }
 
     // MARK: Persistence
@@ -196,8 +194,20 @@ final class TrafficStore {
     func loadFromDisk(retention: Int) {
         lock.lock()
         defer { lock.unlock() }
-        if let loaded = Store.load([Int: DayUsage].self, "daily.json") {
+        minutes = Store.load([Int: [String: Delta]].self, "minutes.json") ?? [:]
+        minuteHosts = Store.load([Int: [String: Delta]].self, "minute-hosts.json") ?? [:]
+        prune()
+        if let loaded = Store.load([Int: DayUsage].self, "daily-local.json") {
             days = loaded
+        } else if let legacy = Store.load([Int: DayUsage].self, "daily.json") {
+            // Legacy UTC days cannot be split into local days without finer history.
+            for (epoch, usage) in legacy {
+                let local = Int(Calendar.current.startOfDay(for: Date(timeIntervalSince1970: Double(epoch))).timeIntervalSince1970)
+                var day = days[local] ?? DayUsage()
+                for (key, value) in usage.apps { day.apps[key, default: Delta()].add(value) }
+                for (key, value) in usage.hosts { day.hosts[key, default: Delta()].add(value) }
+                days[local] = day
+            }
         }
         pruneDaysLocked(retention: retention)
     }
@@ -205,8 +215,12 @@ final class TrafficStore {
     func saveToDisk() {
         lock.lock()
         let snapshot = days
+        let minuteSnapshot = minutes
+        let hostSnapshot = minuteHosts
         lock.unlock()
-        Store.save(snapshot, "daily.json")
+        Store.save(snapshot, "daily-local.json")
+        Store.save(minuteSnapshot, "minutes.json")
+        Store.save(hostSnapshot, "minute-hosts.json")
     }
 
     func reset() {
@@ -216,6 +230,6 @@ final class TrafficStore {
         minuteHosts.removeAll()
         days.removeAll()
         lock.unlock()
-        Store.remove("daily.json")
+        for file in ["daily.json", "daily-local.json", "minutes.json", "minute-hosts.json"] { Store.remove(file) }
     }
 }

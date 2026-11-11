@@ -41,6 +41,9 @@ struct AppSettings: Codable {
     var spikeFloorBytes: Double = 262_144     // 256 KB/s
 
     var autoBlockNewApp: Bool = false
+    var alertBehavior: Bool = true
+    var budgetGB: Double = 0
+    var billingDay: Int = 1
     var graphStacked: Bool = false            // main chart: per-app stacked mode
 
     // Tolerant decode: older config.json files lack newer keys.
@@ -48,6 +51,9 @@ struct AppSettings: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        alertBehavior = try c.decodeIfPresent(Bool.self, forKey: .alertBehavior) ?? true
+        budgetGB = try c.decodeIfPresent(Double.self, forKey: .budgetGB) ?? 0
+        billingDay = try c.decodeIfPresent(Int.self, forKey: .billingDay) ?? 1
         sampleInterval = try c.decodeIfPresent(Double.self, forKey: .sampleInterval) ?? 2.0
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 30
         appearance = try c.decodeIfPresent(AppearanceMode.self, forKey: .appearance) ?? .dark
@@ -69,7 +75,7 @@ struct AppSettings: Codable {
     private enum CodingKeys: String, CodingKey {
         case sampleInterval, retentionDays, appearance, showMenuBarIcon, launchAtLogin
         case alertNewApp, alertNewHost, alertNewDevice, alertSpike, alertDNSChange, alertARPSpoof, alertFirewallChange
-        case spikeSigma, spikeFloorBytes, autoBlockNewApp, graphStacked
+        case spikeSigma, spikeFloorBytes, autoBlockNewApp, graphStacked, budgetGB, billingDay, alertBehavior
     }
 
     static func load() -> AppSettings {
@@ -144,6 +150,8 @@ struct Device: Codable, Identifiable {
     var lastSeen: Date
     var isGateway: Bool = false
     var acknowledged: Bool = false
+    var alias: String?
+    var network: String?
 
     var kindIcon: String {
         let v = (vendor + " " + name).lowercased()
@@ -202,6 +210,13 @@ struct AppAlert: Codable, Identifiable {
     var title: String
     var detail: String
     var date: Date
+    var snapshot: [SpikeApp]?
+}
+
+struct SpikeApp: Codable {
+    var name: String
+    var down: Double
+    var up: Double
 }
 
 // MARK: - Firewall

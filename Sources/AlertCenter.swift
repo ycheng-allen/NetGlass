@@ -18,8 +18,8 @@ final class AlertCenter: ObservableObject {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    func add(_ type: AlertType, title: String, detail: String) {
-        let alert = AppAlert(type: type, title: title, detail: detail, date: Date())
+    func add(_ type: AlertType, title: String, detail: String, snapshot: [SpikeApp]? = nil) {
+        let alert = AppAlert(type: type, title: title, detail: detail, date: Date(), snapshot: snapshot)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.alerts.insert(alert, at: 0)
@@ -31,6 +31,12 @@ final class AlertCenter: ObservableObject {
             Store.save(self.unread, "alerts-unread.json")
             self.postNotification(alert)
         }
+    }
+
+    var onOpen: ((AppAlert) -> Void)?
+
+    func open(identifier: String) {
+        if let alert = alerts.first(where: { $0.id.uuidString == identifier }) { onOpen?(alert) }
     }
 
     private func postNotification(_ alert: AppAlert) {

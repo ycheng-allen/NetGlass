@@ -12,7 +12,8 @@ final class UsageModel: ObservableObject {
 
     var periodStart: Date {
         let cal = Calendar.current
-        let now = cal.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+        let component: Calendar.Component = scope == .day ? .day : (scope == .week ? .weekOfYear : .month)
+        let now = cal.date(byAdding: component, value: offset, to: Date()) ?? Date()
         switch scope {
         case .day:
             return cal.startOfDay(for: now)
@@ -29,9 +30,9 @@ final class UsageModel: ObservableObject {
         let cal = Calendar.current
         switch scope {
         case .day:
-            return periodStart.addingTimeInterval(86400)
+            return cal.date(byAdding: .day, value: 1, to: periodStart)!
         case .week:
-            return periodStart.addingTimeInterval(7 * 86400)
+            return cal.date(byAdding: .weekOfYear, value: 1, to: periodStart)!
         case .month:
             return cal.date(byAdding: .month, value: 1, to: periodStart) ?? periodStart.addingTimeInterval(30 * 86400)
         }
@@ -53,13 +54,15 @@ final class UsageModel: ObservableObject {
     }
 
     func totals(state: AppState) -> (apps: [String: Delta], hosts: [String: Delta]) {
-        let win = SelectionWindow(start: periodStart, end: min(periodEnd, Date()))
-        let r = (state.store.appTotals(window: win), state.store.hostTotals(window: win))
-        if ProcessInfo.processInfo.environment["NETGLASS_DEBUG"] != nil {
-            print("[usage] win=\(win.start)→\(win.end) span=\(win.span) apps=\(r.0.count) hosts=\(r.1.count) rawCount=\(state.appRows.count)")
-            fflush(stdout)
+        let start = Int(periodStart.timeIntervalSince1970)
+        let end = Int(periodEnd.timeIntervalSince1970)
+        var apps: [String: Delta] = [:]
+        var hosts: [String: Delta] = [:]
+        for (day, usage) in state.store.days where day >= start && day < end {
+            for (key, value) in usage.apps { apps[key, default: Delta()].add(value) }
+            for (key, value) in usage.hosts { hosts[key, default: Delta()].add(value) }
         }
-        return r
+        return (apps, hosts)
     }
 }
 
@@ -76,6 +79,8 @@ struct UsagePage: View {
             ScrollView {
                 VStack(spacing: 14) {
                     summaryCards
+                    budgetCard
+                    comparison
                     tableCard
                 }
                 .padding(16)
@@ -138,6 +143,66 @@ struct UsagePage: View {
         }
     }
 
+    private var comparison: some View {
+        let end = min(model.periodEnd, Date())
+        let previousStart = Calendar.current.date(byAdding: .day, value: -1, to: model.periodStart)!
+        let previousEnd = Calendar.current.date(byAdding: .day, value: -1, to: end)!
+        let previous = state.store.appTotals(window: SelectionWindow(start: previousStart, end: previousEnd))
+        let current = state.store.appTotals(window: SelectionWindow(start: model.periodStart, end: end))
+        let increase = Set(current.keys).union(previous.keys).map { key in
+            (state.identity.meta(for: key).name, Int64(clamping: current[key]?.total ?? 0) - Int64(clamping: previous[key]?.total ?? 0))
+        }.sorted { $0.1 > $1.1 }
+        return Group {
+            if model.scope == .day {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Label("与前一天同时段相比", systemImage: "chart.bar.xaxis").font(.system(size: 12, weight: .semibold))
+                        Spacer()
+                        if !previous.isEmpty {
+                            let difference = Int64(clamping: current.values.reduce(UInt64(0)) { $0 + $1.total }) - Int64(clamping: previous.values.reduce(UInt64(0)) { $0 + $1.total })
+                            Text("\(difference >= 0 ? "+" : "−")\(Fmt.bytes(UInt64(abs(difference))))")
+                                .font(.system(size: 14, weight: .semibold, design: .monospaced)).foregroundStyle(difference > 0 ? P.up : P.down)
+                        }
+                    }
+                    if previous.isEmpty {
+                        Text("暂无同期记录").font(.system(size: 11)).foregroundStyle(P.sub).padding(.vertical, 8)
+                    } else {
+                        ForEach(Array(increase.prefix(5).enumerated()), id: \.offset) { _, item in
+                            HStack {
+                                Text(item.0).font(.system(size: 12))
+                                Spacer()
+                                Text("\(item.1 >= 0 ? "+" : "−")\(Fmt.bytes(UInt64(abs(item.1))))")
+                                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(item.1 > 0 ? P.up : P.down)
+                            }
+                        }
+                    }
+                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(P.text).background(P.card, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(P.border))
+            }
+        }
+    }
+
+    private var budgetCard: some View {
+        Group {
+            if state.settings.budgetGB > 0 {
+                let fraction = Double(state.budgetUsed) / (state.settings.budgetGB * 1_000_000_000)
+                HStack(spacing: 16) {
+                    Image(systemName: "gauge.with.dots.needle.50percent").font(.system(size: 22)).foregroundStyle(P.accent)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(state.budgetText).font(.system(size: 11))
+                            Spacer()
+                            Text(String(format: "%.0f%%", fraction * 100)).font(.system(size: 11, weight: .medium)).monospacedDigit()
+                        }
+                        ProgressView(value: min(max(fraction, 0), 1)).tint(fraction >= 1 ? P.danger : P.accent)
+                    }
+                }.padding(16).foregroundStyle(P.text).background(P.card, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(P.border))
+            }
+        }
+    }
+
     private func summaryCard(_ title: String, _ value: String, _ color: Color, _ icon: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
@@ -160,7 +225,7 @@ struct UsagePage: View {
         return VStack(spacing: 0) {
             Picker("", selection: $segment) {
                 Text("按应用").tag(0)
-                Text("按主机").tag(1)
+                Text("按主机（估算）").tag(1)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -374,6 +439,12 @@ struct AlertsPage: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(Capsule().fill(P.border.opacity(0.5)))
+                }
+                if let snapshot = alert.snapshot {
+                    ForEach(Array(snapshot.enumerated()), id: \.offset) { _, app in
+                        Text("\(app.name)  ↓ \(Fmt.speed(app.down))  ↑ \(Fmt.speed(app.up))").font(.caption)
+                    }
+                    Button("回放这一分钟") { state.replay(alert) }
                 }
                 Text(alert.detail)
                     .font(.system(size: 11))

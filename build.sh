@@ -10,7 +10,7 @@ echo "==> swiftc compiling…"
 # Use the Xcode toolchain: the CLT swiftc cannot load the SwiftUI macro plugins.
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 xcrun swiftc -O -parse-as-library \
-    Sources/*.swift \
+    Sources/*.swift Shared/*.swift \
     -o "$APP/Contents/MacOS/NetGlass" \
     -target arm64-apple-macos15.0
 

@@ -29,6 +29,10 @@ struct ThingsPage: View {
                         .font(.system(size: 11))
                         .foregroundColor(P.sub)
                 }
+                Button("清空并重新扫描") {
+                    state.scanner.reset()
+                    state.scanner.scan(full: true)
+                }
                 Button {
                     state.scanner.scan(full: true)
                 } label: {
@@ -68,6 +72,10 @@ struct ThingsPage: View {
 }
 
 struct DeviceCard: View {
+    @EnvironmentObject var state: AppState
+    @State private var editing = false
+    @State private var alias = ""
+    @State private var trusted = false
     var dev: Device
     var P: Palette
     @Environment(\.colorScheme) var scheme
@@ -86,13 +94,14 @@ struct DeviceCard: View {
                     .background(Circle().fill(P.accent.opacity(0.12)))
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 5) {
-                        Text(dev.name.isEmpty ? dev.ip : dev.name)
+                        Text((dev.alias?.isEmpty == false ? dev.alias! : (dev.name.isEmpty ? dev.ip : dev.name)))
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundColor(P.text)
                             .lineLimit(1)
                         if dev.isGateway {
                             badge("网关", P.accent)
                         }
+                        if dev.acknowledged { badge("可信", P.down) }
                         if isNew {
                             badge("新设备", P.danger)
                         }
@@ -116,6 +125,50 @@ struct DeviceCard: View {
             }
             .font(.system(size: 9))
             .foregroundColor(P.sub.opacity(0.8))
+        }
+        .contextMenu {
+            Button("编辑名称与信任状态") {
+                alias = dev.alias ?? ""
+                trusted = dev.acknowledged
+                editing = true
+            }
+        }
+        .onTapGesture {
+            alias = dev.alias ?? ""
+            trusted = dev.acknowledged
+            editing = true
+        }
+        .sheet(isPresented: $editing) {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(spacing: 12) {
+                    Image(systemName: dev.kindIcon).font(.system(size: 26)).foregroundStyle(P.accent)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("编辑设备").font(.system(size: 18, weight: .semibold))
+                        Text(dev.ip).font(.system(size: 11, design: .monospaced)).foregroundStyle(P.sub).textSelection(.enabled)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("设备名称").font(.system(size: 12, weight: .medium))
+                    TextField("例如，客厅电视", text: $alias).textFieldStyle(.roundedBorder)
+                }
+                Toggle(isOn: $trusted) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("可信设备").font(.system(size: 12, weight: .medium))
+                        Text("保存到当前网络配置").font(.system(size: 11)).foregroundStyle(P.sub)
+                    }
+                }.toggleStyle(.switch)
+                Divider()
+                HStack {
+                    Spacer()
+                    Button("取消") { editing = false }.keyboardShortcut(.cancelAction)
+                    Button("保存") {
+                        state.scanner.update(dev, alias: alias, trusted: trusted)
+                        state.saveNetworkProfile()
+                        state.insights.save()
+                        editing = false
+                    }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                }
+            }.padding(26).frame(width: 380).foregroundStyle(P.text).background(P.panel).tint(P.accent)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(P.card))
@@ -355,9 +408,9 @@ struct FirewallPage: View {
     private func flameHelp(_ row: FWAppRow) -> String {
         guard row.path.hasPrefix("/") else { return "系统进程：无法通过应用防火墙管理" }
         switch row.state {
-        case .block: return "已阻止联网 — 点击放行（需管理员密码）"
-        case .allow: return "已放行 — 点击阻止联网（需管理员密码）"
-        case .unknown: return "点击加入防火墙并阻止联网（需管理员密码）"
+        case .block: return "已阻止入站连接 — 点击放行（需管理员密码）"
+        case .allow: return "已允许入站 — 点击阻止入站连接（需管理员密码）"
+        case .unknown: return "点击加入防火墙并阻止入站连接（需管理员密码）"
         }
     }
 

@@ -44,10 +44,11 @@ struct PidConn {
 
 enum LSOF {
     static func connections() -> [PidConn] {
-        let r = Shell.run("/usr/sbin/lsof", ["-nP", "-i", "-F", "pcn"])
+        let r = Shell.run("/usr/sbin/lsof", ["-nP", "-i", "-F", "pcnP"])
         guard r.code == 0 || r.code == 1 else { return [] }
         var out: [Int: PidConn] = [:]
         var currentPid: Int?
+        var transport = "未知"
         for line in r.out.split(separator: "\n") {
             guard line.count > 1 else { continue }
             let tag = line.first!
@@ -58,6 +59,8 @@ enum LSOF {
                 if let pid = currentPid, out[pid] == nil {
                     out[pid] = PidConn(pid: pid_t(pid), cmd: "", remotes: [], sockets: [])
                 }
+            case "P":
+                transport = value
             case "c":
                 if let pid = currentPid { out[pid]?.cmd = value }
             case "n":
@@ -73,7 +76,7 @@ enum LSOF {
                 guard NetUtil.isUsableRemote(ip) else { continue }
                 out[pid]?.remotes.insert(ip)
                 if !port.isEmpty {
-                    out[pid]?.sockets.insert("\(ip):\(port)")
+                    out[pid]?.sockets.insert("\(transport)|\(value)")
                 }
             default:
                 break

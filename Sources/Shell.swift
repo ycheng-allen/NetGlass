@@ -241,6 +241,7 @@ struct RootView: View {
         case .things: ThingsPage()
         case .firewall: FirewallPage()
         case .alerts: AlertsPage()
+        case .diagnosis: DiagnosticsPage()
         }
     }
 }

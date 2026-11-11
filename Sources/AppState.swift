@@ -4,7 +4,7 @@ import ServiceManagement
 
 final class AppState: ObservableObject {
     enum Page: Int, CaseIterable {
-        case graph = 0, usage, things, firewall, alerts
+        case graph = 0, usage, things, firewall, alerts, diagnosis
 
         var title: String {
             switch self {
@@ -13,6 +13,7 @@ final class AppState: ObservableObject {
             case .things: return "设备"
             case .firewall: return "防火墙"
             case .alerts: return "警报"
+            case .diagnosis: return "诊断"
             }
         }
 
@@ -23,6 +24,7 @@ final class AppState: ObservableObject {
             case .things: return "point.3.connected.trianglepath.dotted"
             case .firewall: return "flame.fill"
             case .alerts: return "bell.fill"
+            case .diagnosis: return "waveform.path.ecg"
             }
         }
     }
@@ -34,10 +36,13 @@ final class AppState: ObservableObject {
             applySettings(old: oldValue)
         }
     }
-    @Published var paused = false
+    @Published var paused = false { didSet { insights.paused = paused } }
     @Published var liveDown: Double = 0
     @Published var liveUp: Double = 0
 
+    let outbound = OutboundFirewall()
+    let insights = NetworkInsights()
+    private var currentProfile = ""
     let store = TrafficStore()
     let scanner = DeviceScanner()
     let firewall = FirewallManager()
@@ -70,7 +75,8 @@ final class AppState: ObservableObject {
     private var prevCum: [String: (UInt64, UInt64)] = [:]
     private var lastHosts: [String: Set<String>] = [:]
     private var lastRates: [String: (Double, Double)] = [:]
-    private var spikeHistory: [Double] = []
+    private var spikeHistory: [[Double]] = [[], []]
+    private var budgetNotified = Store.load([String].self, "budget-alerts.json") ?? []
     private var lastSpikeAlert: Date?
     private var lastDNS: [String] = []
     private var knownApps: [String: Date] = [:]
@@ -95,7 +101,14 @@ final class AppState: ObservableObject {
     }
 
     func start() {
+        insights.onNetworkChange = { [weak self] key, description in self?.switchNetwork(key, description: description) }
+        insights.onHealthChange = { [weak self] diagnosis in
+            guard let self, self.settings.alertSpike else { return }
+            self.alertCenter.add(.spike, title: "网络健康变化", detail: diagnosis)
+        }
+        insights.start()
         alertCenter.requestAuth()
+        alertCenter.onOpen = { [weak self] in self?.replay($0) }
 
         scanner.onNewDevice = { [weak self] dev in
             guard let self, self.settings.alertNewDevice else { return }
@@ -115,6 +128,48 @@ final class AppState: ObservableObject {
         recomputeWindow()
         scheduleTimers()
         sampleTick()
+    }
+
+    func saveNetworkProfile() {
+        guard !currentProfile.isEmpty else { return }
+        var profile = insights.profiles[currentProfile] ?? NetworkProfile()
+        profile.budgetGB = settings.budgetGB
+        profile.billingDay = settings.billingDay
+        profile.alertNewHost = settings.alertNewHost
+        profile.alertSpike = settings.alertSpike
+        profile.alertOptions = ["newApp": settings.alertNewApp, "newDevice": settings.alertNewDevice, "dns": settings.alertDNSChange, "arp": settings.alertARPSpoof, "firewall": settings.alertFirewallChange, "behavior": settings.alertBehavior]
+        profile.devices = scanner.devices
+        insights.profiles[currentProfile] = profile
+    }
+
+    func selectNetworkProfile(_ key: String) {
+        guard key != currentProfile else { return }
+        insights.assignments[insights.detectedNetwork] = key
+        insights.network = key
+        insights.changes.append(NetworkChange(date: Date(), signature: key, description: "手动选择网络配置"))
+        switchNetwork(key, description: insights.networkDescription)
+    }
+
+    private func switchNetwork(_ key: String, description: String) {
+        saveNetworkProfile()
+        currentProfile = key
+        let profile = insights.profiles[key] ?? NetworkProfile(name: description, budgetGB: settings.budgetGB, billingDay: settings.billingDay, alertNewHost: settings.alertNewHost, alertSpike: settings.alertSpike)
+        insights.profiles[key] = profile
+        var config = settings
+        config.budgetGB = profile.budgetGB
+        config.billingDay = profile.billingDay
+        config.alertNewHost = profile.alertNewHost
+        config.alertSpike = profile.alertSpike
+        config.alertNewApp = profile.alertOptions?["newApp"] ?? config.alertNewApp
+        config.alertNewDevice = profile.alertOptions?["newDevice"] ?? config.alertNewDevice
+        config.alertDNSChange = profile.alertOptions?["dns"] ?? config.alertDNSChange
+        config.alertARPSpoof = profile.alertOptions?["arp"] ?? config.alertARPSpoof
+        config.alertFirewallChange = profile.alertOptions?["firewall"] ?? config.alertFirewallChange
+        config.alertBehavior = profile.alertOptions?["behavior"] ?? config.alertBehavior
+        settings = config
+        scanner.activateNetwork(key, devices: profile.devices)
+        scanner.scan(full: true)
+        insights.save()
     }
 
     // MARK: Timers
@@ -236,7 +291,9 @@ final class AppState: ObservableObject {
     private func applySample(t: Date, appDeltas: [String: Delta], hostDeltas: [String: Delta],
                              appHostDeltas: [String: [String: Delta]], rates: [String: (Double, Double)]) {
         store.record(t: t, apps: appDeltas, hosts: hostDeltas)
-        lastRates.merge(rates) { _, new in new }
+        insights.recordTraffic(appDeltas, date: t)
+        insights.recordUploads(rates, alert: alertCenter, enabled: settings.alertBehavior)
+        lastRates = rates
         for (key, hosts) in appHostDeltas {
             var bucket = appHostTotals[key] ?? [:]
             for (ip, d) in hosts { bucket[ip, default: Delta()].add(d) }
@@ -248,7 +305,8 @@ final class AppState: ObservableObject {
         liveDown = liveDown == 0 ? down : liveDown * 0.6 + down * 0.4
         liveUp = liveUp == 0 ? up : liveUp * 0.6 + up * 0.4
 
-        checkSpike(down: liveDown)
+        checkSpike(down: down, up: up, rates: rates)
+        checkBudget()
         checkNewApps(appDeltas: appDeltas)
 
         // Resolve hostnames lazily
@@ -269,21 +327,63 @@ final class AppState: ObservableObject {
         recomputeWindow()
     }
 
-    private func checkSpike(down: Double) {
+    private func checkSpike(down: Double, up: Double, rates: [String: (Double, Double)]) {
         guard settings.alertSpike else { return }
-        spikeHistory.append(down)
-        if spikeHistory.count > 120 { spikeHistory.removeFirst(spikeHistory.count - 120) }
-        guard spikeHistory.count >= 20 else { return }
-        let mean = spikeHistory.reduce(0, +) / Double(spikeHistory.count)
-        let variance = spikeHistory.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(spikeHistory.count)
-        let sigma = variance.squareRoot()
-        if down > mean + settings.spikeSigma * sigma, down > settings.spikeFloorBytes {
-            if let last = lastSpikeAlert, Date().timeIntervalSince(last) < 600 { return }
+        for (index, value) in [down, up].enumerated() {
+            let history = spikeHistory[index]
+            spikeHistory[index].append(value)
+            if spikeHistory[index].count > 120 { spikeHistory[index].removeFirst() }
+            guard history.count >= 20 else { continue }
+            let mean = history.reduce(0, +) / Double(history.count)
+            let sigma = (history.reduce(0) { $0 + pow($1 - mean, 2) } / Double(history.count)).squareRoot()
+            guard value > mean + settings.spikeSigma * sigma, value > settings.spikeFloorBytes else { continue }
+            guard lastSpikeAlert.map({ Date().timeIntervalSince($0) >= 600 }) ?? true else { continue }
             lastSpikeAlert = Date()
-            let ratio = sigma > 1 ? max(2, Int((down - mean) / max(sigma, 1))) : 2
-            alertCenter.add(.spike, title: "流量异常升高",
-                            detail: "当前下载 \(Fmt.speed(down))，超过近期均值 \(ratio)σ")
+            let top = rates.sorted { (index == 0 ? $0.value.0 : $0.value.1) > (index == 0 ? $1.value.0 : $1.value.1) }.prefix(3).map {
+                SpikeApp(name: identity.meta(for: $0.key).name, down: $0.value.0, up: $0.value.1)
+            }
+            alertCenter.add(.spike, title: index == 0 ? "下载流量异常" : "上传流量异常",
+                detail: "当前 \(Fmt.speed(value))，近期均值 \(Fmt.speed(mean))", snapshot: top)
         }
+    }
+
+    var budgetStart: Date {
+        let cal = Calendar.current
+        let now = Date()
+        let month = cal.date(from: cal.dateComponents([.year, .month], from: now))!
+        let start = cal.date(byAdding: .day, value: min(max(settings.billingDay, 1), 28) - 1, to: month)!
+        return start <= now ? start : cal.date(byAdding: .month, value: -1, to: start)!
+    }
+
+    var budgetUsed: UInt64 {
+        (insights.usage[insights.network] ?? [:]).filter { Double($0.key) >= budgetStart.timeIntervalSince1970 }.values.reduce(UInt64(0)) { $0 + $1.total }
+    }
+
+    var budgetText: String {
+        guard settings.budgetGB > 0 else { return "未设置流量预算" }
+        let limit = settings.budgetGB * 1_000_000_000
+        return "本期已用 \(Fmt.bytes(budgetUsed)) · 剩余 \(Fmt.bytes(UInt64(max(0, limit - Double(budgetUsed)))))"
+    }
+
+    private func checkBudget() {
+        guard settings.budgetGB > 0 else { return }
+        for threshold in [80, 100] {
+            let key = "\(insights.network)-\(Int(budgetStart.timeIntervalSince1970))-\(settings.budgetGB)-\(threshold)"
+            if Double(budgetUsed) >= settings.budgetGB * 1_000_000_000 * Double(threshold) / 100, !budgetNotified.contains(key) {
+                budgetNotified.append(key)
+                Store.save(budgetNotified, "budget-alerts.json")
+                alertCenter.add(.spike, title: "流量预算已用 \(threshold)%", detail: budgetText)
+            }
+        }
+    }
+
+    func replay(_ alert: AppAlert) {
+        followNow = false
+        selection = SelectionWindow(start: alert.date.addingTimeInterval(-30), end: alert.date.addingTimeInterval(30))
+        page = .graph
+        recomputeWindow()
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first(where: { $0.canBecomeMain })?.makeKeyAndOrderFront(nil)
     }
 
     private func checkNewApps(appDeltas: [String: Delta]) {
@@ -316,20 +416,26 @@ final class AppState: ObservableObject {
         samplerQueue.async { [weak self] in
             guard let self else { return }
             let conns = LSOF.connections()
+            var observed: [(String, String, String, String)] = []
             var keyConns: [String: Int] = [:]
             var keyHosts: [String: Set<String>] = [:]
             var keySockets: [String: Set<String>] = [:]
             for c in conns {
                 let key = self.identity.key(forPid: c.pid, procName: c.cmd)
+                for socket in c.sockets {
+                    let parts = socket.split(separator: "|", maxSplits: 1).map(String.init)
+                    observed.append((key, self.identity.meta(for: key).name, parts.last ?? socket, parts.count > 1 ? parts[0] : "未知"))
+                }
                 keyConns[key, default: 0] += c.remotes.count
                 keyHosts[key, default: []].formUnion(c.remotes)
                 keySockets[key, default: []].formUnion(c.sockets)
             }
             DispatchQueue.main.async {
+                self.insights.recordConnections(observed, alert: self.alertCenter, enabled: self.settings.alertBehavior)
                 self.activeAppConns = keyConns
                 self.lastHosts = keyHosts
                 self.activeHostsForApp = keyHosts.mapValues { Array($0).sorted() }
-                self.activeSocketsForApp = keySockets.mapValues { Array($0).sorted() }
+                self.activeSocketsForApp = keySockets.mapValues { $0.map { $0.replacingOccurrences(of: "|", with: " ") }.sorted() }
                 self.checkNewHosts(keyHosts: keyHosts)
             }
         }
@@ -368,6 +474,8 @@ final class AppState: ObservableObject {
     }
 
     private func persistTick() {
+        saveNetworkProfile()
+        insights.save()
         store.saveToDisk()
         Store.save(knownApps, "apps.json")
     }
@@ -455,6 +563,9 @@ final class AppState: ObservableObject {
     }
 
     func resetAllData() {
+        insights.resetHistory()
+        budgetNotified.removeAll()
+        Store.save(budgetNotified, "budget-alerts.json")
         store.reset()
         scanner.reset()
         alertCenter.clear()

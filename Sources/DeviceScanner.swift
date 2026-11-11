@@ -8,6 +8,8 @@ final class DeviceScanner: ObservableObject {
     var onNewDevice: ((Device) -> Void)?
     var onARPAlert: ((String) -> Void)?
 
+    private var generation = 0
+    private var sessionNetwork = UUID().uuidString
     private var store: [String: Device] = [:]   // mac (or "ip-x") -> device
     private var ownIPs: Set<String> = []
     private var knownGatewayMAC: String?
@@ -86,10 +88,11 @@ final class DeviceScanner: ObservableObject {
         var len = socklen_t(MemoryLayout<Int32>.size)
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len)
         // connected, refused, or instant-unreachable all indicate a live host
-        return err == 0 || err == ECONNREFUSED || err == EHOSTUNREACH
+        return err == 0 || err == ECONNREFUSED
     }
 
     private func tcpSweep(baseIP: String) -> Set<String> {
+        let localIPs = Set([baseIP])
         let parts = baseIP.split(separator: ".")
         guard parts.count == 4 else { return [] }
         let prefix = parts.dropLast().joined(separator: ".")
@@ -101,11 +104,11 @@ final class DeviceScanner: ObservableObject {
             let lock = NSLock()
             for i in 1...254 {
                 let ip = "\(prefix).\(i)"
-                if ownIPs.contains(ip) { continue }
+                if localIPs.contains(ip) { continue }
+                group.enter()
                 queue.async {
                     sem.wait()
                     defer { sem.signal() }
-                    group.enter()
                     defer { group.leave() }
                     var live = false
                     for port in Self.probePorts {
@@ -130,21 +133,30 @@ final class DeviceScanner: ObservableObject {
     // MARK: Scan
 
     func scan(full: Bool) {
+        guard !scanning else { return }
+        scanning = true
+        let token = generation
+        let prefix = NetUtil.primaryInterface()?.ip.split(separator: ".").dropLast().joined(separator: ".")
+        let known = store.values.filter { device in
+            guard let prefix else { return false }
+            return device.ip.hasPrefix(prefix + ".")
+        }
+        ownIPs = Set([NetUtil.primaryInterface()?.ip].compactMap { $0 })
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            DispatchQueue.main.async { self.scanning = true }
+
             LANNudge.send()
 
             var discovered = self.neighborTable()
             if discovered.isEmpty {
-                self.arpAvailable = false
+
                 if full, let iface = NetUtil.primaryInterface() {
                     for ip in self.tcpSweep(baseIP: iface.ip) {
                         discovered.append((ip, ""))
                     }
                 } else {
                     // light scan: refresh devices already known
-                    discovered = self.store.values.map { ($0.ip, $0.mac) }
+                    discovered = known.filter { self.tcpProbe(ip: $0.ip, port: 80, timeoutMs: 300) }.map { ($0.ip, $0.mac) }
                 }
             } else if full, let iface = NetUtil.primaryInterface() {
                 // enrich active peers with idle-but-alive hosts on our /24
@@ -152,15 +164,17 @@ final class DeviceScanner: ObservableObject {
                     discovered.append((ip, ""))
                 }
             }
-            self.arpAvailable = true
+
 
             // The gateway usually drops TCP probes — always include it explicitly.
             if let gw = NetUtil.defaultGateway(), !discovered.contains(where: { $0.ip == gw }) {
                 discovered.append((gw, ""))
             }
 
-            self.merge(discovered: discovered)
+            let results = discovered
             DispatchQueue.main.async {
+                guard self.generation == token else { return }
+                self.merge(discovered: results)
                 self.scanning = false
                 self.lastScan = Date()
             }
@@ -190,7 +204,8 @@ final class DeviceScanner: ObservableObject {
 
         for (ip, mac) in seen.values {
             let isGateway = (ip == gateway)
-            let key = mac.isEmpty ? "ip-" + ip : mac
+            let network = (NetUtil.defaultGateway() ?? "unknown") + "-" + sessionNetwork
+            let key = mac.isEmpty ? network + "-ip-" + ip : mac
             var dev: Device
             if let existing = store[key] {
                 dev = existing
@@ -199,7 +214,8 @@ final class DeviceScanner: ObservableObject {
                 dev.isGateway = isGateway
             } else {
                 dev = Device(mac: mac, ip: ip, name: "", vendor: mac.isEmpty ? "未识别（系统限制）" : OUI.vendor(for: mac),
-                             firstSeen: now, lastSeen: now, isGateway: isGateway)
+                             firstSeen: now, lastSeen: now, isGateway: isGateway, network: network)
+                dev.alias = store.values.first(where: { $0.ip == ip && $0.mac.isEmpty })?.alias
                 store[key] = dev
                 if isGateway {
                     dev.acknowledged = true // gateways are expected, don't alarm
@@ -207,6 +223,7 @@ final class DeviceScanner: ObservableObject {
                     newDevices.append(dev)
                 }
             }
+            store = store.filter { !($0.value.ip == ip && $0.key != key) }
             store[key] = dev
 
             if isGateway && !mac.isEmpty {
@@ -226,8 +243,9 @@ final class DeviceScanner: ObservableObject {
         for (key, dev) in store where dev.name.isEmpty && !nameRequested.contains(dev.ip) {
             nameRequested.insert(dev.ip)
             let ip = dev.ip
+            let token = generation
             HostResolver.shared.resolve(ip) { [weak self] name in
-                guard let self else { return }
+                guard let self, self.generation == token else { return }
                 if name != ip {
                     var d = self.store[key]
                     let short = name.components(separatedBy: ".").first ?? name
@@ -261,7 +279,31 @@ final class DeviceScanner: ObservableObject {
         persist()
     }
 
+    func update(_ device: Device, alias: String, trusted: Bool) {
+        guard let key = store.first(where: { $0.value.id == device.id })?.key else { return }
+        store[key]?.alias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        store[key]?.acknowledged = trusted
+        devices = store.values.sorted { $0.lastSeen > $1.lastSeen }
+        persist()
+    }
+
+    func activateNetwork(_ key: String, devices saved: [Device]) {
+        generation += 1
+        scanning = false
+        sessionNetwork = key
+        store = Dictionary(saved.map { (($0.mac.isEmpty ? key + "-ip-" + $0.ip : $0.mac), $0) }, uniquingKeysWith: { _, new in new })
+        devices = saved
+        nameRequested.removeAll()
+        knownGatewayMAC = nil
+        lastScan = nil
+        persist()
+    }
+
     func reset() {
+        generation += 1
+        scanning = false
+        lastScan = nil
+        nameRequested.removeAll()
         store.removeAll()
         devices = []
         knownGatewayMAC = nil

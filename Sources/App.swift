@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 
 // MARK: - Menu bar controller (left click: popover panel / right click: menu)
 
@@ -115,21 +116,35 @@ extension MenuBarController: NSMenuDelegate {
 
 // MARK: - App delegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let state = AppState()
     private var menuBar: MenuBarController?
     private var started = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        UNUserNotificationCenter.current().delegate = self
         menuBar = MenuBarController(state: state)
         startOnce()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        DispatchQueue.main.async {
+            self.state.alertCenter.open(identifier: response.notification.request.identifier)
+            completionHandler()
+        }
     }
 
     func startOnce() {
         guard !started else { return }
         started = true
         state.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        state.store.saveToDisk()
+        state.saveNetworkProfile()
+        state.insights.save()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

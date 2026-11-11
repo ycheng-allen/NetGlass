@@ -886,7 +886,7 @@ struct AppDetailPanel: View {
 
             let hosts = hostTotals
             if !hosts.isEmpty {
-                detailLabel("主机（本次运行累计）")
+                detailLabel("主机（估算，本次运行累计）")
                 ForEach(hosts.prefix(6), id: \.ip) { h in
                     HStack(spacing: 6) {
                         Circle()
@@ -932,6 +932,7 @@ struct AppDetailPanel: View {
 struct MiniSparkline: View {
     var buckets: [Bucket]
     var palette: Palette
+    var emptyMessage = "近 30 分钟无流量"
 
     var body: some View {
         Canvas { ctx, size in
@@ -939,7 +940,7 @@ struct MiniSparkline: View {
             var maxV = 0.0
             for b in buckets { maxV = max(maxV, b.down, b.up) }
             guard maxV > 0 else {
-                let text = Text("近 30 分钟无流量").font(.system(size: 8)).foregroundColor(palette.sub.opacity(0.6))
+                let text = Text(emptyMessage).font(.system(size: 8)).foregroundColor(palette.sub.opacity(0.6))
                 ctx.draw(text, at: CGPoint(x: w / 2, y: h / 2))
                 return
             }
