@@ -4,7 +4,7 @@ import ServiceManagement
 
 final class AppState: ObservableObject {
     enum Page: Int, CaseIterable {
-        case graph = 0, usage, things, firewall, alerts, diagnosis
+        case graph = 0, usage, things, firewall, alerts, diagnosis, claudeRisk
 
         var title: String {
             switch self {
@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
             case .firewall: return "防火墙"
             case .alerts: return "警报"
             case .diagnosis: return "诊断"
+            case .claudeRisk: return "Claude风险检测"
             }
         }
 
@@ -25,6 +26,7 @@ final class AppState: ObservableObject {
             case .firewall: return "flame.fill"
             case .alerts: return "bell.fill"
             case .diagnosis: return "waveform.path.ecg"
+            case .claudeRisk: return "globe"
             }
         }
     }
@@ -40,6 +42,8 @@ final class AppState: ObservableObject {
     @Published var liveDown: Double = 0
     @Published var liveUp: Double = 0
 
+    let networkConnectivity = NetworkConnectivity()
+    let ipAssessment = IPAssessment()
     let outbound = OutboundFirewall()
     let insights = NetworkInsights()
     private var currentProfile = ""
@@ -563,6 +567,7 @@ final class AppState: ObservableObject {
     }
 
     func resetAllData() {
+        ipAssessment.reset()
         insights.resetHistory()
         budgetNotified.removeAll()
         Store.save(budgetNotified, "budget-alerts.json")

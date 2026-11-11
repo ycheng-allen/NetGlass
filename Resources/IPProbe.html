@@ -1,0 +1,62 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>NetGlass 设备探测</title><script>
+(async () => {
+    const device = {};
+    const addresses = new Set();
+    let error = null;
+    device["时区"] = Intl.DateTimeFormat().resolvedOptions().timeZone || "未知";
+    device["语言"] = (navigator.languages || [navigator.language]).join(", ");
+    device["Cookie"] = navigator.cookieEnabled ? "已启用" : "已禁用";
+    device["操作系统 / 浏览器"] = "macOS / NetGlass 内置 WebKit";
+    device["触屏"] = navigator.maxTouchPoints > 0 ? "支持" : "未检测到触屏";
+    device["WebKit 用户代理"] = navigator.userAgent;
+    device["触控点数"] = String(navigator.maxTouchPoints || 0);
+    device["Do Not Track"] = navigator.doNotTrack === "1" ? "已开启" : navigator.doNotTrack === "0" ? "已关闭" : "未设置";
+    device["网络类型"] = navigator.connection?.effectiveType || "WebKit 未提供";
+    try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 320;
+        canvas.height = 60;
+        const context = canvas.getContext("2d");
+        context.fillStyle = "#16a79d";
+        context.fillRect(0, 0, 320, 60);
+        context.fillStyle = "#10212b";
+        context.font = "18px sans-serif";
+        context.fillText("NetGlass · 网络环境 2026", 12, 36);
+        const bytes = new TextEncoder().encode(canvas.toDataURL());
+        const hash = await crypto.subtle.digest("SHA-256", bytes);
+        device["Canvas SHA-256"] = Array.from(new Uint8Array(hash), x => x.toString(16).padStart(2, "0")).join("");
+    } catch (_) { device["Canvas SHA-256"] = "无法取得"; }
+    try {
+        const gl = document.createElement("canvas").getContext("webgl");
+        const debug = gl?.getExtension("WEBGL_debug_renderer_info");
+        if (gl) {
+            const values = [gl.getParameter(debug ? debug.UNMASKED_VENDOR_WEBGL : gl.VENDOR), gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER), gl.getParameter(gl.VERSION), gl.getParameter(gl.SHADING_LANGUAGE_VERSION)];
+            const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(values.join("|")));
+            device["WebGL SHA-256"] = Array.from(new Uint8Array(hash), x => x.toString(16).padStart(2, "0")).join("");
+        } else { device["WebGL SHA-256"] = "不可用"; }
+        device["WebGL 渲染器"] = gl ? String(gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER)) : "不可用";
+    } catch (_) { device["WebGL 渲染器"] = "无法取得"; }
+    let peer;
+    try {
+        peer = new RTCPeerConnection({iceServers: [
+            {urls: "stun:stun.cloudflare.com:3478"},
+            {urls: "stun:stun.l.google.com:19302"}
+        ]});
+        peer.createDataChannel("netglass-probe");
+        await new Promise(async (resolve, reject) => {
+            const timer = setTimeout(resolve, 9000);
+            const done = () => { clearTimeout(timer); resolve(); };
+            peer.onicecandidate = event => {
+                if (!event.candidate) { done(); return; }
+                const parts = event.candidate.candidate.split(/\s+/);
+                const kind = parts[parts.indexOf("typ") + 1];
+                if (kind === "srflx" || kind === "host") addresses.add(event.candidate.address || parts[4]);
+            };
+            try { await peer.setLocalDescription(await peer.createOffer()); }
+            catch (failure) { clearTimeout(timer); reject(failure); }
+        });
+    } catch (failure) { error = String(failure); }
+    finally { peer?.close(); }
+    window.webkit.messageHandlers.assessment.postMessage({device, addresses: [...addresses], error});
+})();
+</script></html>

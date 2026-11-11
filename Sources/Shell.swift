@@ -158,7 +158,7 @@ struct TopBar: View {
                     .font(.system(size: 11))
             }
             .foregroundColor(selected ? P.accent : P.sub)
-            .frame(width: 78, height: 54)
+            .frame(width: page == .claudeRisk ? 116 : 78, height: 54)
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(selected ? P.accent.opacity(0.10) : Color.clear)
@@ -242,6 +242,7 @@ struct RootView: View {
         case .firewall: FirewallPage()
         case .alerts: AlertsPage()
         case .diagnosis: DiagnosticsPage()
+        case .claudeRisk: ClaudeRiskPage()
         }
     }
 }

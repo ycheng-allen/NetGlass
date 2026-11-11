@@ -22,8 +22,8 @@ private struct DiagnosticsContent: View {
     @State private var profileName = ""
 
     private var palette: Palette { Palette.for(colorScheme) }
-    private let tabs = ["网络健康", "连接时间线", "网络配置", "出站规则", "诊断报告"]
-    private let tabIcons = ["waveform.path.ecg", "point.3.connected.trianglepath.dotted", "network", "shield.lefthalf.filled", "square.and.arrow.up"]
+    private let tabs = ["网络健康", "连接时间线", "网络配置", "出站规则", "诊断报告", "网络连通性测试"]
+    private let tabIcons = ["waveform.path.ecg", "point.3.connected.trianglepath.dotted", "network", "shield.lefthalf.filled", "square.and.arrow.up", "network"]
     private var currentHealth: [HealthSample] { insights.health.filter { $0.network == insights.network } }
     private var validRange: Bool { start < end }
     private var validProfileName: Bool { !profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -66,7 +66,8 @@ private struct DiagnosticsContent: View {
                     case 1: timelinePanel
                     case 2: profilesPanel
                     case 3: outboundPanel
-                    default: reportPanel
+                    case 4: reportPanel
+                    default: NetworkConnectivityPage(model: state.networkConnectivity)
                     }
                 }.frame(maxWidth: 1180).frame(maxWidth: .infinity).padding(24)
             }

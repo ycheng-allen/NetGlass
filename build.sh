@@ -15,6 +15,8 @@ xcrun swiftc -O -parse-as-library \
     -target arm64-apple-macos15.0
 
 cp Info.plist "$APP/Contents/Info.plist"
+cp Resources/IPProbe.html "$APP/Contents/Resources/"
+cp Resources/LinkTargets.json "$APP/Contents/Resources/"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 codesign --force -s - "$APP" 2>/dev/null || true
 

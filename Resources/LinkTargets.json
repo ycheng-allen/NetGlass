@@ -1,0 +1,242 @@
+[
+  {
+    "group": "cn",
+    "name": "DeepSeek",
+    "endpoint": "https://www.deepseek.com/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "抖音",
+    "endpoint": "https://lf3-static.bytednsdoc.com/obj/eden-cn/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "哔哩哔哩",
+    "endpoint": "https://www.bilibili.com/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "京东",
+    "endpoint": "https://www.jd.com/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "腾讯QQ",
+    "endpoint": "https://www.qq.com/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "微信",
+    "endpoint": "https://res.wx.qq.com/a/wx_fed/assets/res/NTI4MWU5.ico"
+  },
+  {
+    "group": "cn",
+    "name": "小红书",
+    "endpoint": "https://fe-static.xhscdn.com/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "新浪微博",
+    "endpoint": "https://tva1.sinaimg.cn/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "百度",
+    "endpoint": "https://www.baidu.com/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "网易",
+    "endpoint": "https://www.163.com/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "淘宝",
+    "endpoint": "https://www.taobao.com/favicon.ico"
+  },
+  {
+    "group": "cn",
+    "name": "小米",
+    "endpoint": "https://www.mi.com/favicon.ico"
+  },
+  {
+    "group": "jp",
+    "name": "Sony",
+    "endpoint": "https://www.sony.jp/favicon.ico"
+  },
+  {
+    "group": "jp",
+    "name": "任天堂",
+    "endpoint": "https://www.nintendo.co.jp/favicon.ico"
+  },
+  {
+    "group": "jp",
+    "name": "Yahoo! JP",
+    "endpoint": "https://www.yahoo.co.jp/favicon.ico"
+  },
+  {
+    "group": "jp",
+    "name": "LINE",
+    "endpoint": "https://line.me/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Apple",
+    "endpoint": "https://www.apple.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Google",
+    "endpoint": "https://www.google.com/generate_204"
+  },
+  {
+    "group": "us",
+    "name": "YouTube",
+    "endpoint": "https://www.youtube.com/generate_204"
+  },
+  {
+    "group": "us",
+    "name": "GitHub",
+    "endpoint": "https://github.com/generate_204"
+  },
+  {
+    "group": "us",
+    "name": "Cloudflare",
+    "endpoint": "https://1.1.1.1/cdn-cgi/trace"
+  },
+  {
+    "group": "us",
+    "name": "Claude",
+    "endpoint": "https://api.anthropic.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "ChatGPT",
+    "endpoint": "https://chatgpt.com/cdn-cgi/trace"
+  },
+  {
+    "group": "us",
+    "name": "AI Studio",
+    "endpoint": "https://generativelanguage.googleapis.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Amazon",
+    "endpoint": "https://www.amazon.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Bing",
+    "endpoint": "https://www.bing.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Steam",
+    "endpoint": "https://store.steampowered.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Oracle",
+    "endpoint": "https://www.oracle.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Zoom",
+    "endpoint": "https://st1.zoom.us/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Facebook",
+    "endpoint": "https://static.xx.fbcdn.net/rsrc.php/yb/r/hLRJ1GG_y0J.ico"
+  },
+  {
+    "group": "us",
+    "name": "Instagram",
+    "endpoint": "https://static.cdninstagram.com/rsrc.php/yb/r/hLRJ1GG_y0J.ico"
+  },
+  {
+    "group": "us",
+    "name": "X",
+    "endpoint": "https://abs.twimg.com/favicons/twitter.3.ico"
+  },
+  {
+    "group": "us",
+    "name": "Reddit",
+    "endpoint": "https://www.reddit.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "LinkedIn",
+    "endpoint": "https://static.licdn.com/favicon.ico"
+  },
+  {
+    "group": "us",
+    "name": "Twitch",
+    "endpoint": "https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png"
+  },
+  {
+    "group": "us",
+    "name": "Netflix",
+    "endpoint": "https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.ico"
+  },
+  {
+    "group": "gl",
+    "name": "TikTok",
+    "endpoint": "https://www.tiktok.com/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "Spotify",
+    "endpoint": "https://open.spotify.com/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "npm",
+    "endpoint": "https://registry.npmjs.org/"
+  },
+  {
+    "group": "gl",
+    "name": "Takealot",
+    "endpoint": "https://static.takealot.com/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "PixPix",
+    "endpoint": "https://www.pixpix.com/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "Naver",
+    "endpoint": "https://www.naver.com/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "Noon",
+    "endpoint": "https://www.noon.com/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "Wikipedia",
+    "endpoint": "https://www.wikipedia.org/static/favicon/wikipedia.ico"
+  },
+  {
+    "group": "gl",
+    "name": "BBC",
+    "endpoint": "https://www.bbc.com/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "Mistral AI",
+    "endpoint": "https://mistral.ai/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "Yandex",
+    "endpoint": "https://yastatic.net/favicon.ico"
+  },
+  {
+    "group": "gl",
+    "name": "MercadoLibre",
+    "endpoint": "https://http2.mlstatic.com/favicon.ico"
+  }
+]
