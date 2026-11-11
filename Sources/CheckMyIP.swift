@@ -176,8 +176,10 @@ extension IPAssessmentResult {
     }
     func riskSourceSummary(_ key: String) -> String {
         let (first, second) = riskValues(key)
-        func label(_ value: Bool?) -> String { value.map { $0 ? "已标记" : "未标记" } ?? "未知" }
-        return "Net.Coffee：\(label(first)) · CheckMyIP：\(label(second))" + (first != nil && second != nil && first != second ? " · 来源有差异" : "")
+        let parts = [("Net.Coffee", first), ("CheckMyIP", second)].compactMap { source, value in
+            value.map { source + "：" + ($0 ? "已标记" : "未标记") }
+        }
+        return parts.joined(separator: " · ") + (first != nil && second != nil && first != second ? " · 来源有差异" : "")
     }
 }
 
@@ -237,5 +239,21 @@ struct CheckMyIPBrowserObservation: Codable {
     func matches(_ ip: String?) -> Bool {
         guard let own = self.ip, let ip, let normalized = IPsumFeed.canonical(own) else { return false }
         return normalized == IPsumFeed.canonical(ip)
+    }
+}
+
+extension CheckMyIPBrowserObservation {
+    var visibleChecks: [Check] {
+        (checks ?? []).filter { ["ok", "bad", "warn", "info"].contains($0.state) }
+    }
+    var hasVisibleResults: Bool { browserScore != nil || !visibleChecks.isEmpty }
+}
+
+extension IPAssessmentResult {
+    var hasRiskResults: Bool {
+        [risk?.is_vpn, risk?.is_proxy, risk?.is_tor, risk?.is_crawler, risk?.is_abuser, risk?.is_datacenter,
+         checkedIP?.risk?.is_vpn, checkedIP?.risk?.is_proxy, checkedIP?.risk?.is_tor, checkedIP?.risk?.is_relay,
+         checkedIP?.risk?.is_datacenter].contains { $0 != nil }
+        || risk?.signals?.isEmpty == false || risk?.evidence?.isEmpty == false || ipsum?.occurrences != nil
     }
 }

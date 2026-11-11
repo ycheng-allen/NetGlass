@@ -9,11 +9,11 @@ struct IPRiskOverview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .top, spacing: 20) {
-                reputation.frame(maxWidth: .infinity)
-                identity.frame(maxWidth: .infinity)
+                if data?.reputation.value != nil || data?.validRiskScore != nil { reputation.frame(maxWidth: .infinity) }
+                if let data, data.networkIdentity.name != "身份待确认" { identity.frame(maxWidth: .infinity) }
             }
-            browserReputation
-            clues
+            if result.checkMyIPBrowser?.hasVisibleResults == true { browserReputation }
+            if !result.claudeRiskClues.isEmpty { clues }
         }
     }
 
@@ -34,6 +34,7 @@ struct IPRiskOverview: View {
         let value = estimate?.value
         return panel {
             Label("IP 信誉评分", systemImage: "gauge.with.dots.needle.67percent").font(.system(size: 14, weight: .semibold))
+            if value != nil {
             HStack(spacing: 24) {
                 ZStack {
                     Circle().stroke(palette.border, lineWidth: 9)
@@ -52,7 +53,7 @@ struct IPRiskOverview: View {
                     Label("估算值 · 非 Claude 评分", systemImage: "info.circle").font(.system(size: 10)).foregroundStyle(palette.sub)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
-            ForEach(estimate?.components ?? []) { component in
+            ForEach((estimate?.components ?? []).filter { $0.deduction != nil }) { component in
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
                         Label(component.title, systemImage: component.id == "lists" ? "list.bullet.rectangle" : component.id == "abuse" ? "shield.lefthalf.filled" : "person.crop.square.filled.and.at.rectangle")
@@ -69,12 +70,15 @@ struct IPRiskOverview: View {
                     Text(component.detail).font(.system(size: 10)).foregroundStyle(palette.sub).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            }
+            if let riskScore = data?.validRiskScore {
             Divider()
             HStack {
                 Label("源站风险分", systemImage: "exclamationmark.shield")
                 Spacer()
-                Text(data?.validRiskScore.map { "\($0) / 100 · 越高风险线索越多" } ?? "未知")
+                Text("\(riskScore) / 100 · 越高风险线索越多")
             }.font(.system(size: 10)).foregroundStyle(palette.sub)
+            }
             DisclosureGroup("评分方法与范围") {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("IP 信誉使用 CheckMyIP 指定地址资料，按其公开 IP 信誉公式在本机复算。网络身份采用接口类型与匿名工具标记，可能与源站浏览器综合识别结果不同；不直接反转接口风险分。")
@@ -108,11 +112,11 @@ struct IPRiskOverview: View {
             }.padding(14).background(palette.bg, in: RoundedRectangle(cornerRadius: 10))
             Text("连接身份示意 · 不是路由追踪").font(.system(size: 9)).foregroundStyle(palette.sub)
             HStack {
-                Label(result.locationOrganization ?? "组织未知", systemImage: "building.2")
+                if let organization = result.locationOrganization { Label(organization, systemImage: "building.2") }
                 Spacer()
-                Text(result.locationASN.map { "AS\($0)" } ?? "ASN 未知")
+                if let asn = result.locationASN { Text("AS\(asn)") }
             }.font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
-            if let consensus = data?.geo?.consensus {
+            if let consensus = data?.geo?.consensus, let sources = consensus.source_count, sources > 0, consensus.agreement_count != nil {
                 HStack {
                     Label("定位共识", systemImage: "mappin.and.ellipse")
                     Spacer()
@@ -120,11 +124,13 @@ struct IPRiskOverview: View {
                 }.font(.system(size: 11))
                 ProgressView(value: Double(consensus.agreement_count ?? 0), total: Double(max(1, consensus.source_count ?? 0))).tint(palette.accent)
             }
+            if let data, data.checkedLists > 0 {
             HStack {
                 Label("地址名单", systemImage: "checklist")
                 Spacer()
-                Text(data.map { $0.checkedLists > 0 ? "\($0.directHits) 项命中 · \($0.checkedLists) 项完成" : "检查尚未完成" } ?? "未知")
+                Text("\(data.directHits) 项命中 · \(data.checkedLists) 项完成")
             }.font(.system(size: 11))
+            }
             Text("网络类型、匿名工具、归属与名单复用同一次 CheckMyIP 查询。名称推断保留来源依据，未标记代理不等于直连或安全。")
                 .font(.system(size: 10)).foregroundStyle(palette.sub).fixedSize(horizontal: false, vertical: true)
         }
@@ -136,28 +142,29 @@ struct IPRiskOverview: View {
         return panel {
             Label("CheckMyIP 现场信誉", systemImage: "safari.fill").font(.system(size: 14, weight: .semibold))
             HStack(alignment: .top, spacing: 16) {
-                liveScore("浏览器信誉", value: site?.browserScore, icon: "macwindow", detail: "NetGlass 内置 WebKit")
-                liveScore("页面 IP 信誉", value: sameExit ? site?.ipScore : nil, icon: "network", detail: sameExit ? "出口与 Claude 一致" : "页面出口与 Claude 不一致或未知")
-                liveScore("页面综合信誉", value: sameExit ? site?.overallScore : nil, icon: "chart.bar.fill", detail: sameExit ? "直接读取源站结果" : "不用于 Claude 出口评估")
+                if let value = site?.browserScore { liveScore("浏览器信誉", value: value, icon: "macwindow", detail: "NetGlass 内置 WebKit") }
+                if sameExit, let value = site?.ipScore { liveScore("页面 IP 信誉", value: value, icon: "network", detail: "出口与 Claude 一致") }
+                if sameExit, let value = site?.overallScore { liveScore("页面综合信誉", value: value, icon: "chart.bar.fill", detail: "直接读取源站结果") }
             }
             if let site {
-                Text(site.summary ?? "源站未提供汇总说明").font(.system(size: 11)).foregroundStyle(palette.sub)
+                if let summary = site.summary { Text(summary.replacingOccurrences(of: #" · \d+ 项检查无法运行"#, with: "", options: .regularExpression)).font(.system(size: 11)).foregroundStyle(palette.sub) }
                 if !sameExit {
                     Text("CheckMyIP 页面采用访问它时的出口；Claude 的 IP 信誉继续使用指定地址查询。浏览器信誉包含该现场环境的网络检查，不代表其他浏览器。")
                         .font(.system(size: 10)).foregroundStyle(palette.sub)
                 }
-                if let error = site.error { Label(error, systemImage: "exclamationmark.circle").font(.system(size: 10)).foregroundStyle(palette.up) }
-                DisclosureGroup("源站检查明细（\(site.checks?.count ?? 0)）") {
+                if !site.visibleChecks.isEmpty {
+                DisclosureGroup("源站检查明细（\(site.visibleChecks.count)）") {
                     VStack(alignment: .leading, spacing: 12) {
                         if let identity = site.identity { Label(identity, systemImage: "person.crop.square.filled.and.at.rectangle").font(.system(size: 11)) }
-                        ForEach(site.checks ?? []) { check in
+                        ForEach(site.visibleChecks) { check in
                             Label(check.text, systemImage: check.state == "bad" ? "exclamationmark.circle.fill" : check.state == "ok" ? "checkmark.circle" : "info.circle")
                                 .font(.system(size: 10)).foregroundStyle(check.state == "bad" ? palette.up : palette.sub)
                         }
                         Text("现场获取于 " + site.checkedAt.formatted()).font(.system(size: 10)).foregroundStyle(palette.sub)
                     }.padding(.top, 10)
                 }.font(.system(size: 11))
-            } else { Text("正在请求 CheckMyIP 并运行现场检查；旧记录可重新评估获取。").font(.system(size: 11)).foregroundStyle(palette.sub) }
+                }
+            }
         }
     }
 

@@ -87,8 +87,7 @@ extension IPAssessmentResult {
             if data.type?.type == "datacenter" || data.risk?.is_datacenter == true {
                 clues.append(.init(id: "hosting", title: "机房／云网络出口", detail: "托管属性可能意味着共享出口；不等于已被 Claude 屏蔽，也不能证明账号会被封禁。", icon: "server.rack", kind: .review))
             }
-            if data.checkedLists == 0 || data.reputation.completed < 3 { clues.append(.init(id: "missing", title: "部分信誉检查缺失", detail: "缺失项不能视作通过，建议重新评估或查看来源详情。", icon: "questionmark.diamond", kind: .review)) }
-        } else { clues.append(.init(id: "missing", title: "信誉资料尚未取得", detail: "等待或重新获取 CheckMyIP 指定地址数据。", icon: "questionmark.circle", kind: .review)) }
+        }
         if let country = claudeCountry, rules?.restricted[country.uppercased()] != nil {
             clues.append(.init(id: "region", title: "地区限制参考线索", detail: "参考站规则标记该出口地区受限；请以当前官方支持地区为准。", icon: "globe.badge.chevron.backward", kind: .review))
         }

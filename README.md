@@ -149,13 +149,15 @@ Open **Claude Risk Detection → Assess** to run a new assessment. Results cover
 - Classification displays evidence and disagreements. An ISP label or missing hosting flag does not establish residential access; network-name heuristics are labeled estimates. Source absence, failed queries and incomplete checks remain unknown.
 - Each full assessment downloads **IPsum** and matches the exact exit IP locally, retaining feed date, content version and source-list occurrence count. Unsupported IPv6 coverage stays unknown. CheckMyIP DNSBL observations separate address hits from informational subnet/ASN associations.
 - IP reputation is estimated from CheckMyIP’s public blacklist, abuse and network-identity formula, only when at least two categories are available. Higher reputation is better; the source risk score and its factors are shown separately. These are third-party troubleshooting indicators and cannot predict Claude account suspension or represent Anthropic’s risk model.
-- A separate ephemeral WebKit session runs the **CheckMyIP live page** for up to 45 seconds, reading browser reputation, page IP/overall scores and individual checks. Page IP/overall scores are attributed to the Claude exit only when the addresses match. Page changes, incomplete results and errors remain visible.
+- A separate ephemeral WebKit session runs the **CheckMyIP live page** for up to 45 seconds, reading browser reputation, page IP/overall scores and individual checks. Page IP/overall scores are attributed to the Claude exit only when the addresses match. Missing or failed results are retained in the assessment snapshot; the page shows available scores and completed checks.
 
 ### Requests, privacy and history
 
 Each full assessment uses a new ephemeral HTTP session, cache-bypass policy/headers and request ID, plus fresh DNS/WebKit probes. Net.Coffee path APIs receive the request ID as a header without additional query parameters. Provider and upstream caches may still apply; available generation/cache timestamps are retained.
 
 Assessment contacts the external services listed in the UI, including Net.Coffee, CheckMyIP, Claude/Anthropic, Cloudflare, domestic IP-query services, STUN servers and the IPsum feed. Observed IPs are sent to metadata providers. NetGlass’s own device fingerprints are stored locally and are not submitted to its risk-query APIs; the separately loaded CheckMyIP page runs its own network/browser checks and may communicate with its services. Its temporary session does not reuse the user’s browser login data.
+
+The page omits unavailable fields, failed exit probes, empty DNS/UDP/device sections and incomplete browser/DNSBL checks. This display filtering does not convert missing evidence into a successful check.
 
 The latest 30 snapshots are saved in `~/Library/Application Support/NetGlass/ip-assessments.json`. Adjacent equal-IP observations within 24 hours are merged in the six-entry exit-history display. IP masking affects display, while history clearing and global data reset remove the saved snapshots.
 
